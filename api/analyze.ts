@@ -1,3 +1,4 @@
+// api/analyze.ts
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 
@@ -21,6 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!url || typeof url !== "string")
       return res.status(400).json({ error: "Missing 'url'" });
 
+    // 1) Fetch page HTML (public only)
     const page = await fetch(url, {
       headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
       redirect: "follow",
@@ -28,76 +30,78 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!page.ok)
       return res.status(400).json({ error: `Fetch failed: ${page.status}` });
     const html = await page.text();
-
     const content = extractText(html);
 
+    // 2) OpenAI client
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
+    }
 
-    const system = `You are a CRO expert. Analyze landing pages for conversion best practices (above-the-fold clarity, message match, CTA prominence, trust, friction, mobile heuristics, Core Web Vitals hints from copy/markup). Output STRICT JSON according to the schema.`;
-
-    const user = {
-      role: "user",
-      content: [
-        { type: "text", text: `URL: ${url}` },
-        { type: "text", text: `TEXT (truncated):\n${content}` },
-      ],
-    } as const;
-
-    const schema = {
-      name: "cro_audit",
-      schema: {
-        type: "object",
-        properties: {
-          score: { type: "integer", minimum: 0, maximum: 100 },
-          summary: { type: "string" },
-          key_findings: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                title: { type: "string" },
-                impact: { type: "string", enum: ["high", "medium", "low"] },
-                recommendation: { type: "string" },
-              },
-              required: ["title", "impact", "recommendation"],
+    // 3) Schema (documentation in prompt; parsing enforced via json_object)
+    const schemaShape = {
+      type: "object",
+      properties: {
+        score: { type: "integer", minimum: 0, maximum: 100 },
+        summary: { type: "string" },
+        key_findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              impact: { type: "string", enum: ["high", "medium", "low"] },
+              recommendation: { type: "string" },
             },
-            maxItems: 8,
+            required: ["title", "impact", "recommendation"],
           },
-          quick_wins: { type: "array", items: { type: "string" }, maxItems: 5 },
-          risks: { type: "array", items: { type: "string" }, maxItems: 5 },
+          maxItems: 8,
         },
-        required: ["score", "summary", "key_findings", "quick_wins"],
-        additionalProperties: false,
+        quick_wins: { type: "array", items: { type: "string" }, maxItems: 5 },
+        risks: { type: "array", items: { type: "string" }, maxItems: 5 },
       },
-      strict: true,
-    } as const;
+      required: ["score", "summary", "key_findings", "quick_wins"],
+      additionalProperties: false,
+    };
 
-    const resp = await openai.responses.create({
+    const system = [
+      "You are a senior CRO expert.",
+      "Analyze landing pages for: above-the-fold clarity, message match, CTA prominence, trust, friction, mobile heuristics.",
+      "Return ONLY compact JSON (no prose) matching the provided schema.",
+    ].join(" ");
+
+    const userPrompt = [
+      `URL: ${url}`,
+      `TEXT (truncated):\n${content}`,
+      "Use this JSON schema (shape) exactly:",
+      JSON.stringify(schemaShape),
+      "Rules:",
+      "- Score 0..100, integer.",
+      "- key_findings: max 8 items; include plain, actionable titles + recommendations.",
+      "- quick_wins: 3–5 concise strings.",
+      "- Output JSON only.",
+    ].join("\n\n");
+
+    // 4) Call Chat Completions with JSON output
+    const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      input: [
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
         { role: "system", content: system },
-        user,
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Return JSON only that matches the schema." },
-          ],
-        },
+        { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_schema", json_schema: schema },
-      max_output_tokens: 1200,
     });
 
-    // @ts-ignore - helper to extract text across SDK versions
-    const text =
-      resp.output_text ||
-      JSON.stringify(resp.output?.[0]?.content?.[0]?.text || resp);
+    const text = completion.choices?.[0]?.message?.content || "{}";
 
     let data: any;
     try {
       data = JSON.parse(text);
     } catch {
-      data = { error: "Invalid JSON from model", raw: text };
+      return res
+        .status(500)
+        .json({ error: "Model returned non-JSON output", raw: text });
     }
 
     return res.status(200).json({ url, ...data });
