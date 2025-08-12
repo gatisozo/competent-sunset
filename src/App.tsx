@@ -1,6 +1,23 @@
 import React, { useRef, useState } from "react";
 import type { CroAudit } from "./lib/analyze";
 import { analyzeUrl } from "./lib/analyze";
+function navigate(path: string) {
+  window.history.pushState({}, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+function usePathname() {
+  const [, setTick] = useState(0);
+  const [path, setPath] = useState(() => window.location.pathname);
+  React.useEffect(() => {
+    const onPop = () => {
+      setPath(window.location.pathname);
+      setTick((n) => n + 1);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  return path;
+}
 
 /**
  * Holbox AI – Landing (React + Tailwind)
@@ -132,6 +149,50 @@ export default function App() {
       );
     }
   };
+  const sampleAudit: CroAudit = {
+    score: 82,
+    summary:
+      "Solid structure with a few high-impact fixes for mobile clarity and CTA prominence.",
+    key_findings: [
+      {
+        title: "Hero value unclear on mobile",
+        impact: "high",
+        recommendation:
+          "Shorten headline and place primary CTA above the fold.",
+      },
+      {
+        title: "Primary CTA contrast low",
+        impact: "medium",
+        recommendation: "Raise contrast to ≥4.5:1; add hover/focus states.",
+      },
+      {
+        title: "Trust badges buried",
+        impact: "medium",
+        recommendation: "Move reviews/clients near hero or just below it.",
+      },
+      {
+        title: "LCP image oversized",
+        impact: "high",
+        recommendation:
+          "Serve responsive images (srcset) and preload hero asset.",
+      },
+    ],
+    quick_wins: [
+      "Tighten form labels",
+      "Reduce above-fold padding",
+      "Compress hero image",
+    ],
+  };
+
+  const path = usePathname();
+
+  const handleSeeSample = () => {
+    // atver /sample un ieliek paraugu kā ‘aiAudit’
+    setShowResults(true);
+    setAiError("");
+    setAiAudit(sampleAudit);
+    navigate("/sample");
+  };
 
   const handleOrderFullAudit = () => {
     if (PAYMENT_LINK_URL) {
@@ -150,6 +211,35 @@ export default function App() {
   const handleSeeSample = () => {
     alert("Sample report placeholder — link this to a live demo report.");
   };
+  const [retryIn, setRetryIn] = useState<number | null>(null);
+  try {
+    const audit = await analyzeUrl(url);
+    setAiAudit(audit);
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    setAiError(msg);
+
+    // NEW: ja 429 — piedāvā automātisku retry
+    if (msg.includes("429")) {
+      let t = 10; // sekundes
+      setRetryIn(t);
+      const timer = setInterval(async () => {
+        t -= 1;
+        setRetryIn(t);
+        if (t <= 0) {
+          clearInterval(timer);
+          setRetryIn(null);
+          try {
+            const again = await analyzeUrl(url);
+            setAiAudit(again);
+            setAiError("");
+          } catch (e2: any) {
+            setAiError(String(e2?.message || "AI error"));
+          }
+        }
+      }, 1000);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -341,7 +431,10 @@ export default function App() {
                 </div>
               </div>
               {aiError && (
-                <p className="mt-3 text-sm text-red-600">{aiError}</p>
+                <p className="mt-3 text-sm text-red-600">
+                  {aiError}
+                  {retryIn !== null && <> — retry in {retryIn}s…</>}
+                </p>
               )}
             </div>
             <div className="lg:col-span-2 grid gap-4">
