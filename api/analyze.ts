@@ -129,11 +129,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             impact: "medium",
             recommendation: "Increase color contrast to WCAG 4.5:1.",
           },
+          {
+            title: "Weak hero value proposition",
+            impact: "high",
+            recommendation:
+              "Clarify outcome and add social proof near the hero CTA.",
+          },
+          {
+            title: "Slow mobile LCP",
+            impact: "high",
+            recommendation:
+              "Optimize hero image and reduce render-blocking resources.",
+          },
         ],
         quick_wins: [
           "Clarify hero value prop",
           "Speed up LCP",
           "Add trust badges",
+          "Tighten form labels",
         ],
       });
     }
@@ -203,9 +216,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             role: "user",
             content:
               `URL: ${parsed.toString()}\n\nTEXT (truncated):\n${content}\n\nSchema (shape):\n` +
-              `${JSON.stringify(
-                schemaShape
-              )}\n\nRules:\n- Score integer 0..100\n- key_findings max 8\n- quick_wins 3–5\n- Output JSON only`,
+              `${JSON.stringify(schemaShape)}\n\nRules:\n` +
+              `- Score integer 0..100\n` +
+              `- key_findings: 4–8 items, prioritize highest impact\n` + // <- prasām 4–8
+              `- quick_wins: 3–5 concise strings\n` +
+              `- Output JSON only`,
           },
         ],
       })

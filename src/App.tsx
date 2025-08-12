@@ -87,6 +87,12 @@ export default function App() {
     let raf = requestAnimationFrame(tick);
   };
 
+  // NEW: allow Enter to run the test (both mobile & hero forms)
+  const handleRunTestSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loading && url.trim()) runTest();
+  };
+
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setEmailError("");
@@ -162,20 +168,26 @@ export default function App() {
       <div className="md:hidden sticky top-0 z-30">
         <div className="mx-auto bg-white/95 backdrop-blur border-b">
           <div className="px-3 py-2 flex items-center gap-2">
-            <input
-              aria-label="Enter your website URL"
-              placeholder="yourdomain.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="flex-1 rounded-lg px-3 py-2 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
-            />
-            <button
-              onClick={runTest}
-              disabled={loading || !url.trim()}
-              className="rounded-lg px-3 py-2 bg-[#006D77] text-white text-sm font-medium disabled:opacity-60"
+            {/* NEW: form wrapper to allow Enter */}
+            <form
+              onSubmit={handleRunTestSubmit}
+              className="flex w-full items-center gap-2"
             >
-              {loading ? "Running…" : "Run"}
-            </button>
+              <input
+                aria-label="Enter your website URL"
+                placeholder="yourdomain.com"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                className="flex-1 rounded-lg px-3 py-2 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
+              />
+              <button
+                type="submit"
+                disabled={loading || !url.trim()}
+                className="rounded-lg px-3 py-2 bg-[#006D77] text-white text-sm font-medium disabled:opacity-60"
+              >
+                {loading ? "Running…" : "Run"}
+              </button>
+            </form>
           </div>
         </div>
       </div>
@@ -224,20 +236,26 @@ export default function App() {
               it — powered by 100+ CRO heuristics.
             </p>
             <div className="mt-4 md:mt-6 hidden md:flex flex-col sm:flex-row gap-3">
-              <input
-                aria-label="Enter your website URL"
-                placeholder="Enter your website URL"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
-              />
-              <button
-                onClick={runTest}
-                disabled={loading || !url.trim()}
-                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
+              {/* NEW: form wrapper to allow Enter */}
+              <form
+                onSubmit={handleRunTestSubmit}
+                className="flex w-full flex-col sm:flex-row gap-3"
               >
-                {loading ? "Running…" : "Run Free Test"}
-              </button>
+                <input
+                  aria-label="Enter your website URL"
+                  placeholder="Enter your website URL"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
+                />
+                <button
+                  type="submit"
+                  disabled={loading || !url.trim()}
+                  className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
+                >
+                  {loading ? "Running…" : "Run Free Test"}
+                </button>
+              </form>
             </div>
             <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm">
               <div className="flex items-center gap-2">
