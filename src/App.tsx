@@ -1,6 +1,23 @@
 import React, { useRef, useState } from "react";
 import type { CroAudit } from "./lib/analyze";
 import { analyzeUrl } from "./lib/analyze";
+
+/**
+ * Holbox AI – Landing (React + Tailwind)
+ * Integrated with OpenAI CRO analyzer via /api/analyze
+ *
+ * Env-driven fallbacks for payments/email (optional):
+ *  - VITE_PAYMENT_LINK_URL
+ *  - VITE_EMAIL_ENDPOINT_URL
+ *  - VITE_SALES_EMAIL
+ */
+
+// --- ENV + inline fallback config ---
+const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || ""; // e.g. https://buy.stripe.com/test_abc...
+const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || ""; // e.g. https://formspree.io/f/xyz...
+const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
+
+/* --------------------- tiny SPA helpers --------------------- */
 function navigate(path: string) {
   window.history.pushState({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
@@ -19,22 +36,9 @@ function usePathname() {
   return path;
 }
 
-/**
- * Holbox AI – Landing (React + Tailwind)
- * Integrated with OpenAI CRO analyzer via /api/analyze
- *
- * Env-driven fallbacks for payments/email (optional):
- *  - VITE_PAYMENT_LINK_URL
- *  - VITE_EMAIL_ENDPOINT_URL
- *  - VITE_SALES_EMAIL
- */
-
-// --- ENV + inline fallback config ---
-const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || ""; // e.g. https://buy.stripe.com/test_abc...
-const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || ""; // e.g. https://formspree.io/f/xyz...
-const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
-
 export default function App() {
+  const path = usePathname();
+
   // URL + run test
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,6 +54,7 @@ export default function App() {
   // AI audit state
   const [aiAudit, setAiAudit] = useState<CroAudit | null>(null);
   const [aiError, setAiError] = useState("");
+  const [retryIn, setRetryIn] = useState<number | null>(null); // 429 retry countdown
 
   // Animated score target (fallback if AI not yet configured)
   const fallbackScore = 72;
@@ -57,6 +62,44 @@ export default function App() {
     fallbackScore,
     Math.round((progress / 100) * fallbackScore)
   );
+
+  // Sample audit data for /sample route
+  const sampleAudit: CroAudit = {
+    score: 82,
+    summary:
+      "Solid structure with a few high-impact fixes for mobile clarity and CTA prominence.",
+    key_findings: [
+      {
+        title: "Hero value unclear on mobile",
+        impact: "high",
+        recommendation:
+          "Shorten headline and place primary CTA above the fold.",
+      },
+      {
+        title: "Primary CTA contrast low",
+        impact: "medium",
+        recommendation:
+          "Raise contrast to ≥4.5:1; add hover/focus states for clarity.",
+      },
+      {
+        title: "Trust badges buried",
+        impact: "medium",
+        recommendation:
+          "Move reviews/clients near the hero or directly below it.",
+      },
+      {
+        title: "LCP image oversized",
+        impact: "high",
+        recommendation:
+          "Serve responsive images (srcset) and preload the hero asset.",
+      },
+    ],
+    quick_wins: [
+      "Tighten form labels",
+      "Reduce above-fold padding",
+      "Compress hero image",
+    ],
+  };
 
   const runTest = () => {
     if (!url.trim()) return;
@@ -66,6 +109,7 @@ export default function App() {
     setLoading(true);
     setAiAudit(null);
     setAiError("");
+    setRetryIn(null);
 
     // Demo countdown (15s). For production set 60_000..120_000.
     const durationMs = 15000;
@@ -87,7 +131,29 @@ export default function App() {
         const audit = await analyzeUrl(url);
         setAiAudit(audit);
       } catch (e: any) {
-        setAiError(e?.message || "AI error");
+        const msg = String(e?.message || "AI error");
+        setAiError(msg);
+
+        // Friendly 429 retry after 10s
+        if (msg.includes("429")) {
+          let t = 10;
+          setRetryIn(t);
+          const timer = setInterval(async () => {
+            t -= 1;
+            setRetryIn(t);
+            if (t <= 0) {
+              clearInterval(timer);
+              setRetryIn(null);
+              try {
+                const again = await analyzeUrl(url);
+                setAiAudit(again);
+                setAiError("");
+              } catch (e2: any) {
+                setAiError(String(e2?.message || "AI error"));
+              }
+            }
+          }, 1000);
+        }
       }
     };
 
@@ -104,7 +170,7 @@ export default function App() {
     let raf = requestAnimationFrame(tick);
   };
 
-  // NEW: allow Enter to run the test (both mobile & hero forms)
+  // Enter submits (mobile & hero forms)
   const handleRunTestSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!loading && url.trim()) runTest();
@@ -149,50 +215,6 @@ export default function App() {
       );
     }
   };
-  const sampleAudit: CroAudit = {
-    score: 82,
-    summary:
-      "Solid structure with a few high-impact fixes for mobile clarity and CTA prominence.",
-    key_findings: [
-      {
-        title: "Hero value unclear on mobile",
-        impact: "high",
-        recommendation:
-          "Shorten headline and place primary CTA above the fold.",
-      },
-      {
-        title: "Primary CTA contrast low",
-        impact: "medium",
-        recommendation: "Raise contrast to ≥4.5:1; add hover/focus states.",
-      },
-      {
-        title: "Trust badges buried",
-        impact: "medium",
-        recommendation: "Move reviews/clients near hero or just below it.",
-      },
-      {
-        title: "LCP image oversized",
-        impact: "high",
-        recommendation:
-          "Serve responsive images (srcset) and preload hero asset.",
-      },
-    ],
-    quick_wins: [
-      "Tighten form labels",
-      "Reduce above-fold padding",
-      "Compress hero image",
-    ],
-  };
-
-  const path = usePathname();
-
-  const handleSeeSample = () => {
-    // atver /sample un ieliek paraugu kā ‘aiAudit’
-    setShowResults(true);
-    setAiError("");
-    setAiAudit(sampleAudit);
-    navigate("/sample");
-  };
 
   const handleOrderFullAudit = () => {
     if (PAYMENT_LINK_URL) {
@@ -209,37 +231,12 @@ export default function App() {
   };
 
   const handleSeeSample = () => {
-    alert("Sample report placeholder — link this to a live demo report.");
+    // open /sample with demo data
+    setShowResults(true);
+    setAiError("");
+    setAiAudit(sampleAudit);
+    navigate("/sample");
   };
-  const [retryIn, setRetryIn] = useState<number | null>(null);
-  try {
-    const audit = await analyzeUrl(url);
-    setAiAudit(audit);
-  } catch (e: any) {
-    const msg = String(e?.message || "");
-    setAiError(msg);
-
-    // NEW: ja 429 — piedāvā automātisku retry
-    if (msg.includes("429")) {
-      let t = 10; // sekundes
-      setRetryIn(t);
-      const timer = setInterval(async () => {
-        t -= 1;
-        setRetryIn(t);
-        if (t <= 0) {
-          clearInterval(timer);
-          setRetryIn(null);
-          try {
-            const again = await analyzeUrl(url);
-            setAiAudit(again);
-            setAiError("");
-          } catch (e2: any) {
-            setAiError(String(e2?.message || "AI error"));
-          }
-        }
-      }, 1000);
-    }
-  }
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -258,7 +255,7 @@ export default function App() {
       <div className="md:hidden sticky top-0 z-30">
         <div className="mx-auto bg-white/95 backdrop-blur border-b">
           <div className="px-3 py-2 flex items-center gap-2">
-            {/* NEW: form wrapper to allow Enter */}
+            {/* form wrapper to allow Enter */}
             <form
               onSubmit={handleRunTestSubmit}
               className="flex w-full items-center gap-2"
@@ -326,7 +323,7 @@ export default function App() {
               it — powered by 100+ CRO heuristics.
             </p>
             <div className="mt-4 md:mt-6 hidden md:flex flex-col sm:flex-row gap-3">
-              {/* NEW: form wrapper to allow Enter */}
+              {/* form wrapper to allow Enter */}
               <form
                 onSubmit={handleRunTestSubmit}
                 className="flex w-full flex-col sm:flex-row gap-3"
@@ -403,6 +400,7 @@ export default function App() {
         ref={previewRef}
         className="mx-auto max-w-6xl px-3 md:px-4 py-10 md:py-16"
       >
+        {/* /sample route simply shows results using sampleAudit */}
         {!showResults ? (
           <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
             Run a test to see your live preview here.
@@ -718,9 +716,9 @@ export default function App() {
             <span>Holbox AI</span>
           </div>
           <div className="flex gap-6">
-            <a href="#">Privacy</a>
-            <a href="#">Terms</a>
-            <a href="#">Contact</a>
+            <a href="/privacy.html">Privacy</a>
+            <a href="/terms.html">Terms</a>
+            <a href="#contact">Contact</a>
           </div>
           <div>© {new Date().getFullYear()} Holbox AI</div>
         </div>
