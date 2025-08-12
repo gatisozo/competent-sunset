@@ -458,7 +458,7 @@ export default function App() {
             <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
               <li>• 40+ checkpoints (UX, CRO, SEO, CWV)</li>
               <li>• Full annotated screenshots</li>
-              <li>• Prioritized, dev‑ready improvement list</li>
+              <li>• Prioritized, dev-ready improvement list</li>
               <li>• PDF + online report (shareable link)</li>
             </ul>
             <div className="mt-6 flex gap-3">
