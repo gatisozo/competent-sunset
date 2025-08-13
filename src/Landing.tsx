@@ -1,3 +1,4 @@
+// src/Landing.tsx
 import React, { useRef, useState } from "react";
 import { analyzeUrl } from "./lib/analyze";
 import type {
@@ -12,20 +13,24 @@ const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
 
 export default function Landing() {
+  // URL + run test
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showResults, setShowResults] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
+  // Email gate
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState("");
   const [emailSubmitted, setEmailSubmitted] = useState(false);
 
+  // AI report state
   const [report, setReport] = useState<CroReport | null>(null);
   const [aiError, setAiError] = useState("");
   const [retryIn, setRetryIn] = useState<number | null>(null);
 
+  // progress demo → animated fallback score
   const fallbackScore = 72;
   const animatedScore = Math.min(
     fallbackScore,
@@ -34,6 +39,8 @@ export default function Landing() {
 
   const runTest = () => {
     if (!url.trim()) return;
+
+    // reset
     setShowResults(false);
     setProgress(0);
     setLoading(true);
@@ -41,25 +48,30 @@ export default function Landing() {
     setAiError("");
     setRetryIn(null);
 
-    const durationMs = 15000;
+    const durationMs = 15000; // demo countdown
     const start = Date.now();
 
     const onDone = async () => {
       setLoading(false);
       setShowResults(true);
-      setTimeout(() => {
-        previewRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
-      }, 100);
+      setTimeout(
+        () =>
+          previewRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          }),
+        100
+      );
 
+      // fetch real AI (free mode)
       try {
         const freeReport = await analyzeUrl(url, "free");
         setReport(freeReport);
       } catch (e: any) {
         const msg = String(e?.message || "AI error");
         setAiError(msg);
+
+        // basic retry if 429
         if (msg.includes("429")) {
           let t = 10;
           setRetryIn(t);
@@ -89,6 +101,7 @@ export default function Landing() {
       if (p < 100) requestAnimationFrame(tick);
       else onDone();
     };
+
     requestAnimationFrame(tick);
   };
 
@@ -106,11 +119,13 @@ export default function Landing() {
       setEmailError("Please enter a valid email address");
       return;
     }
+
     if (!EMAIL_ENDPOINT_URL) {
       setEmailSubmitted(true);
       console.warn("EMAIL_ENDPOINT_URL not set – mocking success");
       return;
     }
+
     try {
       const payload = {
         email,
@@ -119,13 +134,15 @@ export default function Landing() {
           report && typeof (report as any).score === "number"
             ? (report as any).score
             : undefined,
-        message: "Request free PDF summary from Holbox AI",
+        message: "Request free scorecard from Holbox AI",
       };
+
       const res = await fetch(EMAIL_ENDPOINT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
       if (!res.ok) throw new Error("Email endpoint error");
       setEmailSubmitted(true);
     } catch (err) {
@@ -136,6 +153,7 @@ export default function Landing() {
     }
   };
 
+  // Dev flow to /full
   const handleOrderFullAudit = () => {
     const dest = "/full?url=" + encodeURIComponent(url || "") + "&dev=1";
     window.location.href = dest;
@@ -145,10 +163,12 @@ export default function Landing() {
     window.location.href = "/full?sample=1";
   };
 
+  // derived
   const score =
     report && typeof (report as any).score === "number"
       ? ((report as any).score as number)
       : null;
+
   const sections: SectionPresence | undefined = report?.sections_detected;
   const heroSuggestions: Suggestion[] =
     (report as FreeReport)?.hero?.suggestions || [];
@@ -159,6 +179,7 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
+      {/* Test banner */}
       {(!PAYMENT_LINK_URL || !EMAIL_ENDPOINT_URL) && (
         <div className="bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-sm">
           <div className="mx-auto max-w-6xl px-4 py-2">
@@ -232,12 +253,13 @@ export default function Landing() {
         <div className="relative mx-auto max-w-6xl px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
           <div className="text-white">
             <h1 className="text-3xl md:text-5xl font-bold leading-tight">
-              Full AI Website Audit in 1–2 Minutes
+              Get a Second Opinion on Your Website.
             </h1>
             <p className="mt-3 md:mt-4 text-base md:text-xl text-white/90">
-              Instantly see what’s holding back your conversions and how to fix
-              it — powered by 100+ CRO heuristics.
+              The AI tool that instantly grades your landing pages and gives you
+              an action plan to hold your team accountable.
             </p>
+
             <div className="mt-4 md:mt-6 hidden md:flex flex-col sm:flex-row gap-3">
               <form
                 onSubmit={handleRunTestSubmit}
@@ -259,6 +281,7 @@ export default function Landing() {
                 </button>
               </form>
             </div>
+
             <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -274,6 +297,7 @@ export default function Landing() {
               </div>
             </div>
           </div>
+
           <div className="bg-white/80 rounded-2xl p-5 md:p-6 shadow-xl">
             {!loading && !showResults && (
               <div className="h-48 md:h-56 rounded-xl bg-slate-100 border border-slate-200 grid place-items-center text-slate-500">
@@ -291,8 +315,8 @@ export default function Landing() {
                     style={{ width: `${progress}%` }}
                   />
                 </div>
-                <div className="mt-2 text-sm text-slate-600">
-                  Estimated score: {animatedScore}/100
+                <div className="mt-2 text-sm text-slate-100/90">
+                  Estimated grade: {animatedScore}/100
                 </div>
               </div>
             )}
@@ -328,12 +352,13 @@ export default function Landing() {
                     Your Website Summary
                   </h2>
                   <p className="mt-2 text-slate-600">
-                    AI-generated score and top blockers.
+                    AI-generated grade and top blockers.
                   </p>
+
                   {score !== null && (
                     <div className="mt-5 p-5 rounded-2xl border bg-white">
                       <div className="text-sm text-slate-500">
-                        Conversion Readiness Score
+                        Your Website’s Grade
                       </div>
                       <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
                         <div
@@ -346,6 +371,7 @@ export default function Landing() {
                       </div>
                     </div>
                   )}
+
                   {aiError && (
                     <p className="mt-3 text-sm text-red-600">
                       {aiError}
@@ -367,7 +393,7 @@ export default function Landing() {
                               }`}
                             />
                             <span className={`${v ? "" : "text-slate-400"}`}>
-                              {k.replace("_", " ")}
+                              {k.replaceAll("_", " ")}
                             </span>
                           </div>
                         ))}
@@ -427,16 +453,16 @@ export default function Landing() {
         )}
       </section>
 
-      {/* EMAIL GATE */}
+      {/* EMAIL GATE (Scorecard) */}
       <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
           <div>
             <h3 className="text-xl md:text-2xl font-semibold">
-              Get a Free PDF Summary
+              Get a Free Scorecard for Your Website.
             </h3>
             <p className="mt-2 text-slate-600">
-              Download your findings with annotated screenshots and quick fixes.
-              No spam — unsubscribe anytime.
+              Download a report with your website’s top 3 weaknesses and a few
+              quick fixes. No credit card, no spam.
             </p>
           </div>
           <form
@@ -453,7 +479,7 @@ export default function Landing() {
               type="submit"
               className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
             >
-              {emailSubmitted ? "Sent ✓" : "Send My Free PDF"}
+              {emailSubmitted ? "Sent ✓" : "Get My Free Scorecard"}
             </button>
           </form>
           {(emailError || emailSubmitted) && (
@@ -464,7 +490,7 @@ export default function Landing() {
               {emailSubmitted && (
                 <p className="text-sm text-green-700">
                   Check your inbox — we’ve sent a link to download your free
-                  PDF.
+                  scorecard.
                 </p>
               )}
             </div>
@@ -483,9 +509,15 @@ export default function Landing() {
               Full AI Report in 1–2 Minutes — Just $50
             </h3>
             <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
-              <li>• 40+ checkpoints (UX, CRO, SEO, CWV)</li>
+              <li>
+                • A Complete Check-up: We review over 40 critical points in UX,
+                SEO, CRO, and performance.
+              </li>
               <li>• Full annotated screenshots</li>
-              <li>• Prioritized, dev-ready improvement list</li>
+              <li>
+                • Actionable To-Do List: A prioritized list of fixes you can
+                hand directly to your team or freelancer.
+              </li>
               <li>• PDF + online report (shareable link)</li>
             </ul>
             <div className="mt-6 flex gap-3">
@@ -526,7 +558,7 @@ export default function Landing() {
               Free Test — Benefits
             </h4>
             <ul className="mt-3 space-y-2 text-slate-700 text-sm md:text-base">
-              <li>• See your Conversion Readiness Score</li>
+              <li>• See Your Website’s Grade</li>
               <li>• Discover top 3–5 issues holding you back</li>
               <li>• AI analysis based on industry best practices</li>
             </ul>
@@ -582,14 +614,20 @@ export default function Landing() {
       <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 md:gap-8 items-center">
           <div className="md:col-span-2">
-            <h3 className="text-2xl font-semibold">
-              Case Study: +21% Conversions in 30 Days
+            <h3 className="text-2xl md:text-3xl font-semibold">
+              How Holbox AI Gave This Business Owner Confidence in Their
+              Agency’s Work.
             </h3>
             <p className="mt-2 text-slate-600">
               Before: CTA hidden below the fold, slow load times. After: CTA
               above the fold, load time &lt; 2.0s. Result: more sign-ups and
               lower CPA.
             </p>
+            <blockquote className="mt-4 p-4 bg-slate-50 border rounded-xl text-slate-700">
+              “I used to worry if I was wasting money, but the Holbox AI report
+              gave me a clear list of improvements to request. Now I know I’m
+              getting a great return.”
+            </blockquote>
           </div>
           <div className="h-28 md:h-32 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
             Before/After chart
@@ -620,6 +658,10 @@ export default function Landing() {
             [
               "Which pages are scanned?",
               "Key pages like home, product/service, and forms/checkout (configurable).",
+            ],
+            [
+              "Can I use this to evaluate the work of my marketing team or agency?",
+              "Yes. Many of our customers use Holbox AI to get an unbiased report on a new website or landing page. It's the fastest way to get a second opinion and ensure you're getting a great return on your investment.",
             ],
           ].map((f, i) => (
             <div key={i} className="rounded-2xl border bg-white p-5">
