@@ -163,11 +163,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         redirect: "follow",
       });
       if (!pageResp.ok) {
-        return res
-          .status(400)
-          .json({
-            error: `Fetch failed: ${pageResp.status} ${pageResp.statusText}`,
-          });
+        return res.status(400).json({
+          error: `Fetch failed: ${pageResp.status} ${pageResp.statusText}`,
+        });
       }
       html = await pageResp.text();
     } catch (e: any) {
@@ -218,7 +216,12 @@ ${text}`;
         text: {
           format: {
             type: "json_schema",
-            json_schema: jsonSchema,
+            name: "cro_full_report", // <-- REQUIRED at this level
+            json_schema: {
+              // keep your existing schema here
+              schema: jsonSchema.schema, // or inline the schema
+              strict: true,
+            },
           },
         },
         max_output_tokens: 1400,
