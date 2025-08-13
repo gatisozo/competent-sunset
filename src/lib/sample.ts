@@ -62,21 +62,9 @@ export const sampleFullReport: FullReport = {
       rationale:
         "Headline not benefit-driven; CTA not visible on first viewport on smaller screens.",
       suggestions: [
-        "Rewrite headline to reflect primary outcome (e.g., 'Balance hormones in 30 days').",
+        "Rewrite headline to reflect primary outcome.",
         "Ensure CTA is visible without scrolling on mobile.",
       ],
-    },
-    {
-      section: "value_prop",
-      status: "ok",
-      rationale: "Bulleted benefits are present.",
-      suggestions: ["Add one proof-point (stat or certification)."],
-    },
-    {
-      section: "social_proof",
-      status: "missing",
-      rationale: "No testimonials, badges, or case studies above the fold.",
-      suggestions: ["Add 2–3 testimonials and partner logos near the CTA."],
     },
   ],
   page: { url: "https://example.com", title: "Example – Landing" },

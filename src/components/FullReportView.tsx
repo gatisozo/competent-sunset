@@ -10,7 +10,10 @@ import type {
   BacklogItem,
 } from "../lib/analyze";
 
-// Helper: read query params safely
+// pretty print keys like "value_prop" -> "value prop" without using replaceAll
+const pretty = (s: string) => s.replace(/_/g, " ");
+
+// Query param helper
 function useQuery() {
   const [q, setQ] = React.useState<URLSearchParams>(() =>
     typeof window !== "undefined"
@@ -25,26 +28,6 @@ function useQuery() {
   return q;
 }
 
-// …imports stay the same…
-
-// add helper near top of file
-const pretty = (s: string) => s.replace(/_/g, " ");
-
-// …inside the component render, change these two places…
-
-// (A) Sections Present label
-// before:
-// {k.replaceAll("_", " ")}
-// after:
-{pretty(k)}
-
-// (B) Content Audit section title
-// before:
-// {c.section.replaceAll("_", " ")}
-// after:
-{pretty(c.section)}
-
-
 const card = "rounded-2xl border bg-white p-4 md:p-5";
 const badge =
   "inline-flex items-center px-2 py-0.5 rounded-full text-xs border";
@@ -53,12 +36,12 @@ export default function FullReportView() {
   const q = useQuery();
   const initialUrl = q.get("url") || "";
   const isSample = q.get("sample") === "1";
+
   const [url, setUrl] = React.useState(initialUrl);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
   const [report, setReport] = React.useState<CroReport | null>(null);
 
-  // Load on mount if url or sample provided
   React.useEffect(() => {
     if (isSample) {
       setReport(sampleFullReport);
@@ -93,12 +76,10 @@ export default function FullReportView() {
   }
 
   function onDownloadPdf() {
-    // Quick stub for dev: native print dialog (user can “Save as PDF”)
-    window.print();
+    window.print(); // dev: users can “Save as PDF”
   }
 
   function onSendPdf() {
-    // Dev placeholder: open mailto with link to this report
     const link = window.location.href;
     const subject = encodeURIComponent("Holbox AI – Full Report PDF");
     const body = encodeURIComponent(
@@ -115,6 +96,7 @@ export default function FullReportView() {
   const sections: SectionPresence | undefined = (report as any)
     ?.sections_detected;
   const quickWins: string[] | undefined = (report as any)?.quick_wins;
+
   const findings: Suggestion[] =
     ((report as FullReport)?.findings as Suggestion[]) ||
     ((report as FreeReport)?.hero?.suggestions || []).concat(
@@ -221,15 +203,15 @@ export default function FullReportView() {
               <div className="font-medium mb-2">Sections Present</div>
               {sections ? (
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                  {Object.entries(sections).map(([k, v]) => (
-                    <div key={k} className="flex items-center gap-2">
+                  {Object.entries(sections).map(([key, val]) => (
+                    <div key={key} className="flex items-center gap-2">
                       <span
                         className={`h-2 w-2 rounded-full ${
-                          v ? "bg-emerald-500" : "bg-slate-300"
+                          val ? "bg-emerald-500" : "bg-slate-300"
                         }`}
                       />
-                      <span className={`${v ? "" : "text-slate-400"}`}>
-                        {k.replaceAll("_", " ")}
+                      <span className={`${val ? "" : "text-slate-400"}`}>
+                        {pretty(String(key))}
                       </span>
                     </div>
                   ))}
@@ -259,7 +241,7 @@ export default function FullReportView() {
 
             <div className={card}>
               <div className="font-medium mb-2">Prioritized Backlog</div>
-              {backlog?.length ? (
+              {backlog && backlog.length ? (
                 <div className="space-y-2">
                   {backlog.map((b, i) => (
                     <div key={i} className="rounded-lg border p-3">
@@ -335,7 +317,7 @@ export default function FullReportView() {
                     <div key={i} className="p-3 md:p-4">
                       <div className="flex items-center justify-between">
                         <div className="font-medium capitalize">
-                          {c.section.replaceAll("_", " ")}
+                          {pretty(c.section)}
                         </div>
                         <span
                           className={`${badge} ${
@@ -356,8 +338,8 @@ export default function FullReportView() {
                       )}
                       {c.suggestions?.length ? (
                         <ul className="mt-2 text-sm text-slate-700 space-y-1">
-                          {c.suggestions.map((s, j) => (
-                            <li key={j}>• {s}</li>
+                          {c.suggestions.map((sug, j) => (
+                            <li key={j}>• {sug}</li>
                           ))}
                         </ul>
                       ) : null}
@@ -387,7 +369,6 @@ export default function FullReportView() {
                     <div className="px-3 py-2 text-sm border-b">
                       Suggested (annotated)
                     </div>
-                    {/* For dev we reuse the screenshot and show overlay notes. */}
                     {/* eslint-disable-next-line jsx-a11y/alt-text */}
                     <img
                       src={suggestedShot}
