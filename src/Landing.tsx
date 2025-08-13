@@ -393,7 +393,7 @@ export default function Landing() {
                               }`}
                             />
                             <span className={`${v ? "" : "text-slate-400"}`}>
-                              {k.replaceAll("_", " ")}
+                              {k.split("_").join(" ")}
                             </span>
                           </div>
                         ))}
