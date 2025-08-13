@@ -1,144 +1,89 @@
 import type { FullReport } from "./analyze";
 
 export const sampleFullReport: FullReport = {
-  url: "https://demo.holbox.ai",
-  score: 82,
-  assets: {
-    screenshot_url:
-      "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?q=80&w=1400&auto=format&fit=crop",
-  },
+  score: 74,
+  summary:
+    "Solid baseline, but hero clarity and CTA contrast limit conversions.",
+  key_findings: [
+    {
+      title: "Hero message unclear on mobile",
+      impact: "low",
+      recommendation: "Shorten headline and keep CTA in first viewport.",
+    },
+    {
+      title: "Primary CTA has low contrast",
+      impact: "low",
+      recommendation: "Increase color contrast and add hover/focus styles.",
+    },
+  ],
+  quick_wins: [
+    "Compress hero image",
+    "Move CTA above fold",
+    "Add social proof",
+  ],
+  risks: [],
   sections_detected: {
     hero: true,
     value_prop: true,
-    social_proof: true,
-    features: true,
+    social_proof: false,
     pricing: false,
+    features: true,
     faq: true,
     contact: true,
     footer: true,
   },
-  hero: {
-    suggestions: [
-      {
-        impact: "high",
-        title: "Clarify outcome in headline",
-        recommendation:
-          "Lead with a measurable result (e.g., “+15–30% sign-ups in 30 days”).",
-      },
-      {
-        impact: "medium",
-        title: "Increase CTA contrast",
-        recommendation:
-          "Raise text/background contrast to ≥4.5:1 and add hover/focus states.",
-      },
-      {
-        impact: "medium",
-        title: "Add trust badges below CTA",
-        recommendation:
-          "Show 3–5 client logos or a short testimonial near the hero.",
-      },
-    ],
-    overlay: { x: 0, y: 0, w: 1366, h: 740 },
-  },
-  next_section: {
-    type: "features",
-    suggestions: [
-      {
-        impact: "high",
-        title: "Outcome-oriented bullets",
-        recommendation:
-          "Rewrite bullets to promise a specific improvement (e.g., “Reduce bounce by 10–20%”).",
-      },
-      {
-        impact: "low",
-        title: "Micro-CTA under each card",
-        recommendation:
-          "Link to the relevant part of the full report for deeper context.",
-      },
-    ],
-    overlay: { x: 0, y: 740, w: 1366, h: 700 },
-  },
-  quick_wins: [
-    "Preload hero image",
-    "Shorten hero copy",
-    "Move trust near the fold",
-  ],
   findings: [
     {
-      impact: "high",
-      effort: "low",
-      owner: "design",
-      section: "hero",
-      title: "Hero value unclear on mobile",
-      recommendation:
-        "Shorten headline to ≤60 chars and ensure CTA is visible in first viewport.",
-    },
-    {
-      impact: "medium",
-      effort: "low",
-      owner: "design",
-      section: "cta",
-      title: "Primary CTA contrast low",
-      recommendation:
-        "Update button color and increase font weight for better prominence.",
-    },
-    {
-      impact: "high",
-      effort: "medium",
-      owner: "dev",
-      section: "performance",
-      title: "LCP image oversized",
-      recommendation:
-        "Serve responsive sizes (srcset) and preload the hero asset.",
-    },
-    {
-      impact: "medium",
-      effort: "low",
-      owner: "marketing",
-      section: "social_proof",
-      title: "Logos too far down",
-      recommendation: "Move 3–5 notable logos just below the hero content.",
-    },
-    {
+      title: "Hero value unclear on mobile — hero",
       impact: "low",
-      effort: "low",
-      owner: "design",
-      section: "forms",
-      title: "Unlabeled form fields",
-      recommendation:
-        "Use explicit labels (not placeholders) and show inline validation.",
+      recommendation: "Shorten headline and keep CTA in the first viewport.",
     },
     {
-      impact: "medium",
-      effort: "medium",
-      owner: "dev",
-      section: "tech_seo",
-      title: "Missing meta description",
-      recommendation:
-        "Add a clear, outcome-oriented meta description (≤160 chars).",
-    },
-    {
+      title: "Primary CTA low contrast — hero",
       impact: "low",
-      effort: "low",
-      owner: "design",
-      section: "footer",
-      title: "Weak footer links",
-      recommendation:
-        "Add links to privacy, terms, and contact with clear naming.",
+      recommendation: "Increase color contrast and add hover/focus styles.",
     },
     {
+      title: "LCP image oversized — performance",
       impact: "medium",
-      effort: "low",
-      owner: "marketing",
-      section: "faq",
-      title: "FAQ lacks objections",
       recommendation:
-        "Add answers for price, data security, and time-to-value.",
+        "Serve responsive images (srcset) and preload hero asset.",
     },
   ],
   prioritized_backlog: [
-    { title: "Hero value & CTA", impact: 3, effort: 1, eta_days: 1 },
+    { title: "Fix hero value + CTA", impact: 3, effort: 1, eta_days: 1 },
     { title: "Responsive hero image", impact: 3, effort: 2, eta_days: 2 },
-    { title: "Add trust logos", impact: 2, effort: 1, eta_days: 1 },
+    { title: "Add trust badges", impact: 2, effort: 1, eta_days: 1 },
   ],
+  content_audit: [
+    {
+      section: "hero",
+      status: "weak",
+      rationale:
+        "Headline not benefit-driven; CTA not visible on first viewport on smaller screens.",
+      suggestions: [
+        "Rewrite headline to reflect primary outcome (e.g., 'Balance hormones in 30 days').",
+        "Ensure CTA is visible without scrolling on mobile.",
+      ],
+    },
+    {
+      section: "value_prop",
+      status: "ok",
+      rationale: "Bulleted benefits are present.",
+      suggestions: ["Add one proof-point (stat or certification)."],
+    },
+    {
+      section: "social_proof",
+      status: "missing",
+      rationale: "No testimonials, badges, or case studies above the fold.",
+      suggestions: ["Add 2–3 testimonials and partner logos near the CTA."],
+    },
+  ],
+  page: { url: "https://example.com", title: "Example – Landing" },
+  assets: {
+    screenshot_url:
+      "https://dummyimage.com/1200x700/edf2f7/111827.png&text=Screenshot",
+    suggested_screenshot_url:
+      "https://dummyimage.com/1200x700/f7fafc/111827.png&text=Suggested",
+  },
 };

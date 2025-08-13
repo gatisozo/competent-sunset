@@ -25,6 +25,26 @@ function useQuery() {
   return q;
 }
 
+// …imports stay the same…
+
+// add helper near top of file
+const pretty = (s: string) => s.replace(/_/g, " ");
+
+// …inside the component render, change these two places…
+
+// (A) Sections Present label
+// before:
+// {k.replaceAll("_", " ")}
+// after:
+{pretty(k)}
+
+// (B) Content Audit section title
+// before:
+// {c.section.replaceAll("_", " ")}
+// after:
+{pretty(c.section)}
+
+
 const card = "rounded-2xl border bg-white p-4 md:p-5";
 const badge =
   "inline-flex items-center px-2 py-0.5 rounded-full text-xs border";
