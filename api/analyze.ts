@@ -61,11 +61,13 @@ function buildScreenshotUrl(url: string): string | null {
 }
 
 /** ---------- JSON schema for Responses API ---------- */
+// Tight JSON Schema for Responses API (all objects lock extra props)
 const croSchema = {
   type: "object",
   properties: {
     score: { type: "integer", minimum: 0, maximum: 100 },
     summary: { type: "string" },
+
     key_findings: {
       type: "array",
       items: {
@@ -76,10 +78,13 @@ const croSchema = {
           recommendation: { type: "string" },
         },
         required: ["title", "impact", "recommendation"],
+        additionalProperties: false, // <—
       },
       maxItems: 8,
     },
+
     quick_wins: { type: "array", items: { type: "string" }, maxItems: 6 },
+
     findings: {
       type: "array",
       items: {
@@ -90,9 +95,11 @@ const croSchema = {
           recommendation: { type: "string" },
         },
         required: ["title", "impact", "recommendation"],
+        additionalProperties: false, // <—
       },
       maxItems: 20,
     },
+
     prioritized_backlog: {
       type: "array",
       items: {
@@ -105,15 +112,17 @@ const croSchema = {
           notes: { type: "string" },
         },
         required: ["title", "impact", "effort"],
+        additionalProperties: false, // <—
       },
       maxItems: 12,
     },
+
     content_audit: {
       type: "array",
       items: {
         type: "object",
         properties: {
-          section: { type: "string" },
+          section: { type: "string" }, // e.g. "hero"
           status: { type: "string", enum: ["ok", "weak", "missing"] },
           rationale: { type: "string" },
           suggestions: {
@@ -123,12 +132,13 @@ const croSchema = {
           },
         },
         required: ["section", "status"],
+        additionalProperties: false, // <—
       },
       maxItems: 12,
     },
   },
   required: ["score", "summary", "key_findings", "quick_wins", "findings"],
-  additionalProperties: false,
+  additionalProperties: false, // <— keep at top level too
 } as const;
 
 /** ---------- handler ---------- */
