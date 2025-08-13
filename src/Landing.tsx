@@ -12,19 +12,16 @@ const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
 
 export default function Landing() {
-  // URL + run test
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showResults, setShowResults] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // Email gate
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState("");
   const [emailSubmitted, setEmailSubmitted] = useState(false);
 
-  // Report (FREE)
   const [report, setReport] = useState<CroReport | null>(null);
   const [aiError, setAiError] = useState("");
   const [retryIn, setRetryIn] = useState<number | null>(null);
@@ -63,7 +60,6 @@ export default function Landing() {
       } catch (e: any) {
         const msg = String(e?.message || "AI error");
         setAiError(msg);
-        // 429 auto retry
         if (msg.includes("429")) {
           let t = 10;
           setRetryIn(t);
@@ -140,13 +136,11 @@ export default function Landing() {
     }
   };
 
-  // DEV: “Order Full Audit” → /full?url=... (full analyze + PDF pogas)
   const handleOrderFullAudit = () => {
     const dest = "/full?url=" + encodeURIComponent(url || "") + "&dev=1";
-    window.location.href = dest; // vienkārši un droši (pilna lapa)
+    window.location.href = dest;
   };
 
-  // “See Sample Report” → /full?sample=1
   const handleSeeSample = () => {
     window.location.href = "/full?sample=1";
   };
@@ -165,7 +159,6 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
-      {/* TEST MODE BANNER */}
       {(!PAYMENT_LINK_URL || !EMAIL_ENDPOINT_URL) && (
         <div className="bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-sm">
           <div className="mx-auto max-w-6xl px-4 py-2">
@@ -479,7 +472,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* FULL AUDIT OFFER */}
+      {/* PRICING */}
       <section
         id="pricing"
         className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16"
@@ -525,7 +518,133 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* (Atstāju tavas Benefits / Comparison / Case Study / FAQ / Footer sadaļas, ja tās bija atsevišķos blokos) */}
+      {/* BENEFITS */}
+      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
+        <div className="grid md:grid-cols-2 gap-6 md:gap-8">
+          <div className="rounded-3xl border bg-white p-5 md:p-6">
+            <h4 className="text-lg md:text-xl font-semibold">
+              Free Test — Benefits
+            </h4>
+            <ul className="mt-3 space-y-2 text-slate-700 text-sm md:text-base">
+              <li>• See your Conversion Readiness Score</li>
+              <li>• Discover top 3–5 issues holding you back</li>
+              <li>• AI analysis based on industry best practices</li>
+            </ul>
+          </div>
+          <div className="rounded-3xl border bg-white p-5 md:p-6">
+            <h4 className="text-lg md:text-xl font-semibold">
+              Full Audit — Benefits
+            </h4>
+            <ul className="mt-3 space-y-2 text-slate-700 text-sm md:text-base">
+              <li>• Complete action plan — instantly</li>
+              <li>• 40+ checkpoints across UX, CRO, and performance</li>
+              <li>• Clear before/after examples; real conversion lifts</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      {/* COMPARISON */}
+      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
+        <h3 className="text-2xl font-semibold mb-6">Compare Plans</h3>
+        <div className="overflow-x-auto rounded-2xl border">
+          <table className="min-w-full text-sm bg-white">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="text-left p-4">Feature</th>
+                <th className="text-left p-4">Free Test</th>
+                <th className="text-left p-4">Full Audit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["AI Analysis", "✓", "✓"],
+                ["Top 3–5 recommendations", "✓", "✓"],
+                ["Full annotated screenshots", "✗", "✓"],
+                ["40+ checkpoints", "✗", "✓"],
+                ["Prioritized task list", "✗", "✓"],
+                ["PDF & online report", "✓ (limited)", "✓ (full)"],
+                ["Delivery time", "1–2 min", "1–2 min"],
+                ["Price", "Free", "$50"],
+              ].map((row, i) => (
+                <tr key={i} className="border-t">
+                  <td className="p-4 font-medium">{row[0]}</td>
+                  <td className="p-4">{row[1]}</td>
+                  <td className="p-4">{row[2]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* CASE STUDY */}
+      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
+        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 md:gap-8 items-center">
+          <div className="md:col-span-2">
+            <h3 className="text-2xl font-semibold">
+              Case Study: +21% Conversions in 30 Days
+            </h3>
+            <p className="mt-2 text-slate-600">
+              Before: CTA hidden below the fold, slow load times. After: CTA
+              above the fold, load time &lt; 2.0s. Result: more sign-ups and
+              lower CPA.
+            </p>
+          </div>
+          <div className="h-28 md:h-32 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
+            Before/After chart
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section
+        id="faq"
+        className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16"
+      >
+        <h3 className="text-2xl font-semibold">FAQ</h3>
+        <div className="mt-6 grid md:grid-cols-2 gap-6">
+          {[
+            [
+              "Does AI make mistakes?",
+              "The analysis is based on measurable data and CRO standards, but human validation is always possible.",
+            ],
+            [
+              "Do you need server access?",
+              "No, the audit runs on publicly available content only.",
+            ],
+            [
+              "Are my data secure?",
+              "Reports are deleted after 14 days unless permanent access is purchased.",
+            ],
+            [
+              "Which pages are scanned?",
+              "Key pages like home, product/service, and forms/checkout (configurable).",
+            ],
+          ].map((f, i) => (
+            <div key={i} className="rounded-2xl border bg-white p-5">
+              <div className="font-medium">{f[0]}</div>
+              <p className="mt-1 text-slate-600 text-sm">{f[1]}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="border-t">
+        <div className="mx-auto max-w-6xl px-3 md:px-4 py-8 md:py-10 flex flex-col md:flex-row items-center justify-between gap-3 md:gap-4 text-sm text-slate-600">
+          <div className="flex items-center gap-2">
+            <div className="h-6 w-6 rounded-md bg-[#006D77]" />
+            <span>Holbox AI</span>
+          </div>
+          <div className="flex gap-6">
+            <a href="/privacy.html">Privacy</a>
+            <a href="/terms.html">Terms</a>
+            <a href="#contact">Contact</a>
+          </div>
+          <div>© {new Date().getFullYear()} Holbox AI</div>
+        </div>
+      </footer>
     </div>
   );
 }
