@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  analyzeUrl, // kept for non-stream fallback if needed
   type FullReport,
   type Suggestion,
   type ContentAuditItem,
@@ -83,6 +82,61 @@ const impactToLift: Record<number, string> = {
   1: "≈ +5% leads",
 };
 
+/* -------------- smart screenshot (spinner + retry + backup) -------------- */
+function useSmartScreenshot(primary?: string | null, backup?: string | null) {
+  const [src, setSrc] = useState<string | null>(primary || null);
+  const [loading, setLoading] = useState<boolean>(!!primary);
+  const [retries, setRetries] = useState(0);
+  const MAX_RETRIES = 6;
+
+  useEffect(() => {
+    setSrc(primary || null);
+    setLoading(!!primary);
+    setRetries(0);
+  }, [primary]);
+
+  const appendCb = (u: string) => {
+    try {
+      const url = new URL(u);
+      url.searchParams.set("cb", String(Date.now()));
+      return url.toString();
+    } catch {
+      return u + (u.includes("?") ? "&" : "?") + "cb=" + Date.now();
+    }
+  };
+
+  const onLoad: React.ReactEventHandler<HTMLImageElement> = (e) => {
+    const img = e.currentTarget;
+    const isTiny = img.naturalWidth <= 300 || img.naturalHeight <= 200;
+    const looksGif = (src || "").toLowerCase().includes(".gif");
+
+    if ((isTiny || looksGif) && retries < MAX_RETRIES && src) {
+      setTimeout(() => {
+        setSrc(appendCb(src));
+        setRetries((r) => r + 1);
+      }, 1500);
+      return;
+    }
+    setLoading(false);
+  };
+
+  const onError = () => {
+    if (backup && src !== backup) {
+      setSrc(appendCb(backup));
+      setLoading(true);
+      return;
+    }
+    if (src && retries < MAX_RETRIES) {
+      setSrc(appendCb(src));
+      setRetries((r) => r + 1);
+    } else {
+      setLoading(false);
+    }
+  };
+
+  return { src, loading, onLoad, onError };
+}
+
 /* -------------- component -------------- */
 export default function FullReportView() {
   const [url, setUrl] = useState<string>(() => getQS("url") || "");
@@ -151,7 +205,6 @@ export default function FullReportView() {
           setLoading(false);
         }
       });
-      // network errors also trigger onerror without .data
       es.onerror = () => {
         /* handled above */
       };
@@ -172,8 +225,13 @@ export default function FullReportView() {
   /* ---------- derived ---------- */
   const findings = (report?.findings || []) as Suggestion[];
   const contentAudit = report?.content_audit as ContentAuditItem[] | undefined;
+
   const screenshotUrl = report?.assets?.screenshot_url || null;
+  const screenshotBackup =
+    (report as any)?.assets?.screenshot_url_backup || null;
   const suggestedShot = report?.assets?.suggested_screenshot_url || null;
+
+  const shot = useSmartScreenshot(screenshotUrl, screenshotBackup);
 
   const topHeroSuggestions = useMemo(() => {
     const heroOnes = findings.filter((f) => isHeroFinding(f.title));
@@ -270,70 +328,41 @@ export default function FullReportView() {
                 shows the most impactful fixes.
               </div>
 
-              {(() => {
-                const isSameShot =
-                  !suggestedShot || suggestedShot === screenshotUrl;
-                const overlayList = topHeroSuggestions;
-
-                if (isSameShot) {
-                  return (
-                    <div className={`${heroCropWrap} relative mt-2`}>
-                      {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                      <img src={screenshotUrl} style={heroCropImg} />
-                      {overlayList.length > 0 && (
-                        <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
-                          <div className="font-medium mb-1">
-                            Top hero suggestions
-                          </div>
-                          <ul className="space-y-1">
-                            {overlayList.map((s, i) => (
-                              <li key={i}>
-                                • <b>{s.title}</b> — {s.recommendation}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="grid md:grid-cols-2 gap-3 mt-2">
-                    <div className={heroCropWrap}>
-                      <div className="px-3 py-2 text-sm border-b">
-                        Before (current)
-                      </div>
-                      {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                      <img src={screenshotUrl} style={heroCropImg} />
-                    </div>
-                    <div className={`${heroCropWrap} relative`}>
-                      <div className="px-3 py-2 text-sm border-b">
-                        Suggested
-                      </div>
-                      {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                      <img
-                        src={suggestedShot || screenshotUrl}
-                        style={heroCropImg}
-                      />
-                      {overlayList.length > 0 && (
-                        <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
-                          <div className="font-medium mb-1">
-                            Top hero suggestions
-                          </div>
-                          <ul className="space-y-1">
-                            {overlayList.map((s, i) => (
-                              <li key={i}>
-                                • <b>{s.title}</b> — {s.recommendation}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
+              <div className={`${heroCropWrap} relative mt-2`}>
+                {/* Spinner overlay while loading */}
+                {shot.loading && (
+                  <div className="absolute inset-0 grid place-items-center bg-white/60">
+                    <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
                   </div>
-                );
-              })()}
+                )}
+
+                {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                <img
+                  src={shot.src || undefined}
+                  style={heroCropImg}
+                  onLoad={shot.onLoad}
+                  onError={shot.onError}
+                  className={
+                    shot.loading
+                      ? "opacity-0 transition-opacity duration-300"
+                      : "opacity-100 transition-opacity duration-300"
+                  }
+                />
+
+                {/* Overlay: top hero suggestions */}
+                {topHeroSuggestions.length > 0 && (
+                  <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                    <div className="font-medium mb-1">Top hero suggestions</div>
+                    <ul className="space-y-1">
+                      {topHeroSuggestions.map((s, i) => (
+                        <li key={i}>
+                          • <b>{s.title}</b> — {s.recommendation}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
 
               <div className="mt-1 text-xs text-slate-500">
                 * We show screenshots only for sections with issues. Currently

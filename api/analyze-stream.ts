@@ -1,4 +1,3 @@
-// api/analyze-stream.ts
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 
@@ -51,12 +50,20 @@ function detectSections(text: string) {
     footer: has(["privacy", "terms", "©"]),
   };
 }
-function buildScreenshotUrl(url: string): string | null {
-  const tmpl = process.env.SCREENSHOT_URL_TMPL; // e.g. https://s.wordpress.com/mshots/v1/{URL}?w=1200
-  return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
+function buildScreenshotUrls(url: string): {
+  primary: string | null;
+  backup: string | null;
+} {
+  const enc = encodeURIComponent(url);
+  const p = process.env.SCREENSHOT_URL_TMPL || "";
+  const b = process.env.SCREENSHOT_URL_TMPL_BACKUP || "";
+  return {
+    primary: p ? p.replace("{URL}", enc) : null,
+    backup: b ? b.replace("{URL}", enc) : null,
+  };
 }
 
-/* ---------- strict JSON schema for Responses API ---------- */
+/* ---------- strict JSON schema ---------- */
 const croSchema = {
   type: "object",
   properties: {
@@ -141,7 +148,6 @@ const croSchema = {
 
 /* ---------- SSE ---------- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Only GET with query params (?url=...&mode=full)
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
     res.writeHead(405).end();
@@ -157,13 +163,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const urlParam = String(req.query.url || "");
   const mode = String(req.query.mode || "full") as "free" | "full";
 
-  // SSE headers
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
-    // CORS not needed for same-origin; add if you plan cross-origin requests:
-    // "Access-Control-Allow-Origin": "*",
   });
 
   const send = (event: string, data: any) => {
@@ -171,8 +174,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  const heartbeat = setInterval(() => res.write(`:\n\n`), 15000); // keep-alive
-
+  const heartbeat = setInterval(() => res.write(`:\n\n`), 15000);
   let progress = 0;
   const tick = setInterval(() => {
     progress = Math.min(95, progress + Math.random() * 6 + 2);
@@ -188,18 +190,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
       redirect: "follow",
     });
-    if (!pageResp.ok) {
+    if (!pageResp.ok)
       throw new Error(
         `Fetch failed: ${pageResp.status} ${pageResp.statusText}`
       );
-    }
     const html = await pageResp.text();
     send("progress", { value: (progress = Math.max(progress, 15)) });
 
     const title = extractTitle(html);
     const text = extractText(html);
     const sections = detectSections(text);
-    const screenshotUrl = buildScreenshotUrl(url);
+    const { primary: screenshotUrl, backup: screenshotBackup } =
+      buildScreenshotUrls(url);
 
     // OpenAI
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -252,9 +254,8 @@ ${text}`;
         ? (resp as any).content
         : null);
 
-    if (!rawText || typeof rawText !== "string") {
+    if (!rawText || typeof rawText !== "string")
       throw new Error("OpenAI returned no text content");
-    }
 
     let data: any;
     try {
@@ -268,13 +269,13 @@ ${text}`;
 
     send("progress", { value: (progress = Math.max(progress, 95)) });
 
-    // Merge non-LLM fields and finish
     const result = {
       ...data,
       sections_detected: sections,
       page: { url, title },
       assets: {
         screenshot_url: screenshotUrl,
+        screenshot_url_backup: screenshotBackup,
         suggested_screenshot_url: screenshotUrl,
       },
     };

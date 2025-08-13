@@ -59,12 +59,17 @@ function detectSections(text: string) {
   };
 }
 
-function buildScreenshotUrl(url: string): string | null {
-  return `${
-    process.env.VERCEL_URL?.startsWith("http")
-      ? process.env.VERCEL_URL
-      : "https://" + process.env.VERCEL_URL
-  }/api/screenshot?url=${encodeURIComponent(url)}`;
+function buildScreenshotUrls(url: string): {
+  primary: string | null;
+  backup: string | null;
+} {
+  const enc = encodeURIComponent(url);
+  const p = process.env.SCREENSHOT_URL_TMPL || "";
+  const b = process.env.SCREENSHOT_URL_TMPL_BACKUP || "";
+  return {
+    primary: p ? p.replace("{URL}", enc) : null,
+    backup: b ? b.replace("{URL}", enc) : null,
+  };
 }
 
 function safeParse(s: string) {
@@ -75,7 +80,7 @@ function safeParse(s: string) {
   }
 }
 
-/** ---------- Tight JSON Schema (all objects lock extra props; ALL top-level keys required) ---------- */
+/** ---------- Strict JSON schema ---------- */
 const croSchema = {
   type: "object",
   properties: {
@@ -125,7 +130,6 @@ const croSchema = {
           eta_days: { type: "integer" },
           notes: { type: "string" },
         },
-        // Responses API validator requires required[] to include EVERY defined property
         required: ["title", "impact", "effort", "eta_days", "notes"],
         additionalProperties: false,
       },
@@ -137,7 +141,7 @@ const croSchema = {
       items: {
         type: "object",
         properties: {
-          section: { type: "string" }, // hero, value_prop, social_proof, pricing, features, faq, contact, footer
+          section: { type: "string" },
           status: { type: "string", enum: ["ok", "weak", "missing"] },
           rationale: { type: "string" },
           suggestions: {
@@ -152,7 +156,6 @@ const croSchema = {
       maxItems: 12,
     },
   },
-  // IMPORTANT: make ALL top-level properties required per Responses API validation
   required: [
     "score",
     "summary",
@@ -218,8 +221,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const title = extractTitle(html);
     const text = extractText(html);
     const sections = detectSections(text);
-    const screenshotUrl = buildScreenshotUrl(url);
-    const suggestedUrl = screenshotUrl; // dev: reuse
+    const { primary: screenshotUrl, backup: screenshotBackup } =
+      buildScreenshotUrls(url);
 
     // OpenAI
     const system =
@@ -301,7 +304,8 @@ ${text}`;
       page: { url, title },
       assets: {
         screenshot_url: screenshotUrl,
-        suggested_screenshot_url: suggestedUrl,
+        screenshot_url_backup: screenshotBackup,
+        suggested_screenshot_url: screenshotUrl,
       },
     });
   } catch (err: any) {
