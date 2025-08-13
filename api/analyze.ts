@@ -2,6 +2,11 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 
 /** ---------- helpers ---------- */
+function json(res: VercelResponse, code: number, data: any) {
+  res.status(code).setHeader("Content-Type", "application/json");
+  res.send(JSON.stringify(data));
+}
+
 function normalizeUrl(input: string): string {
   const s = String(input || "").trim();
   if (!s) throw new Error("Missing URL");
@@ -55,6 +60,7 @@ function buildScreenshotUrl(url: string): string | null {
   return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
 }
 
+/** ---------- JSON schema for Responses API ---------- */
 const croSchema = {
   type: "object",
   properties: {
@@ -125,50 +131,54 @@ const croSchema = {
   additionalProperties: false,
 } as const;
 
-/** ---------- main handler ---------- */
+/** ---------- handler ---------- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-    return res.status(405).json({ error: "Method not allowed" });
+    return json(res, 405, { error: "Method not allowed" });
   }
 
+  const debug =
+    (typeof req.query?.debug === "string" && req.query.debug === "1") ||
+    (typeof (req.body as any)?.debug === "number" &&
+      (req.body as any).debug === 1);
+
   try {
-    const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const { url: rawUrl, mode = "free" } = body as {
+    const raw =
+      typeof req.body === "string" ? safeParse(req.body) : req.body || {};
+    const { url: rawUrl, mode = "free" } = raw as {
       url?: string;
       mode?: "free" | "full";
     };
 
     if (!process.env.OPENAI_API_KEY) {
-      return res
-        .status(500)
-        .json({ error: "OPENAI_API_KEY is not set on the server" });
+      return json(res, 500, {
+        error: "OPENAI_API_KEY is not set on the server",
+      });
     }
     if (!rawUrl || typeof rawUrl !== "string") {
-      return res.status(400).json({ error: "Missing 'url' (string)" });
+      return json(res, 400, { error: "Missing 'url' (string)" });
     }
 
     const url = normalizeUrl(rawUrl);
 
-    // Fetch page HTML with clear error messaging
-    let html: string;
+    // fetch page
+    let html = "";
     try {
       const pageResp = await fetch(url, {
         headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
         redirect: "follow",
       });
       if (!pageResp.ok) {
-        return res.status(400).json({
+        return json(res, 400, {
           error: `Fetch failed: ${pageResp.status} ${pageResp.statusText}`,
         });
       }
       html = await pageResp.text();
     } catch (e: any) {
-      console.error("FETCH_ERR", e);
-      return res
-        .status(400)
-        .json({ error: `Failed to fetch URL: ${e?.message || e}` });
+      return json(res, 400, {
+        error: `Failed to fetch URL: ${e?.message || e}`,
+      });
     }
 
     const title = extractTitle(html);
@@ -177,9 +187,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const screenshotUrl = buildScreenshotUrl(url);
     const suggestedUrl = screenshotUrl; // dev: reuse
 
+    // OpenAI
     const system =
       "You are a CRO expert. Analyze landing page copy and structure. Return STRICT JSON matching the provided schema.";
-
     const userContent =
       mode === "free"
         ? `Mode: FREE
@@ -195,11 +205,9 @@ TITLE: ${title || "(none)"}
 TEXT (truncated):
 ${text}`;
 
-    // OpenAI call with robust parsing + explicit JSON schema
-    let data: any = null;
+    let data: any;
     try {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
       const resp = await openai.responses.create({
         model: process.env.OPENAI_MODEL || "gpt-4o-mini",
         input: [
@@ -214,34 +222,45 @@ ${text}`;
           format: {
             type: "json_schema",
             name: "cro_full_report",
-            schema: croSchema, // <-- note: schema (not json_schema)
+            schema: croSchema,
             strict: true,
           },
         },
         max_output_tokens: 1400,
       });
 
-      // Extract text robustly across SDK variants
+      // Extract text safely
       // @ts-ignore
-     // @ts-ignore: SDK variants
-const raw =
-resp.output_text ??
-// @ts-ignore
-resp.output?.[0]?.content?.[0]?.text ??
-(typeof (resp as any).content === "string" ? (resp as any).content : null);
+      const rawText =
+        resp.output_text ??
+        // @ts-ignore
+        resp.output?.[0]?.content?.[0]?.text ??
+        (typeof (resp as any).content === "string"
+          ? (resp as any).content
+          : null);
 
-if (!raw || typeof raw !== "string") throw new Error("OpenAI returned no text content");
+      if (!rawText || typeof rawText !== "string") {
+        throw new Error("OpenAI returned no text content");
+      }
 
-let data: any;
-try {
-data = JSON.parse(raw);
-} catch {
-const cleaned = raw.replace(/^[\s`]*\{/, "{").replace(/\}[\s`]*$/, "}");
-data = JSON.parse(cleaned);
-}
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const cleaned = String(rawText)
+          .replace(/^[\s`]*\{/, "{")
+          .replace(/\}[\s`]*$/, "}");
+        data = JSON.parse(cleaned);
+      }
+    } catch (e: any) {
+      const status =
+        e?.status === 429 || e?.code === "insufficient_quota" ? 429 : 502;
+      return json(res, status, {
+        error: e?.message || e?.error?.message || "OpenAI request failed",
+        _debug: debug ? e : undefined,
+      });
+    }
 
-
-    const payload = {
+    return json(res, 200, {
       ...data,
       sections_detected: sections,
       page: { url, title },
@@ -249,11 +268,20 @@ data = JSON.parse(cleaned);
         screenshot_url: screenshotUrl,
         suggested_screenshot_url: suggestedUrl,
       },
-    };
-    return res.status(200).json(payload);
+    });
   } catch (err: any) {
-    console.error("UNCAUGHT_ERR", err);
-    return res.status(500).json({ error: err?.message || "Internal error" });
+    return json(res, 500, {
+      error: err?.message || "Internal error",
+      _debug: debug ? err : undefined,
+    });
+  }
+}
+
+function safeParse(s: string) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
   }
 }
 
