@@ -1,12 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 
-/** --- Utils --- */
+/** ---------- helpers ---------- */
 function normalizeUrl(input: string): string {
   const s = String(input || "").trim();
-  if (!s) return s;
-  if (/^https?:\/\//i.test(s)) return s;
-  return `https://${s}`;
+  if (!s) throw new Error("Missing URL");
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 }
 function extractTitle(html: string): string | undefined {
   const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
@@ -22,20 +21,13 @@ function extractText(html: string, maxChars = 20000) {
     .trim();
   return text.slice(0, maxChars);
 }
-function buildScreenshotUrl(url: string): string | null {
-  const tmpl = process.env.SCREENSHOT_URL_TMPL; // e.g. https://image.thum.io/get/width/1200/{URL}
-  if (!tmpl) return null;
-  return tmpl.replace("{URL}", encodeURIComponent(url));
-}
-
-/** --- Section heuristics (very simple, text-based) --- */
 function detectSections(text: string) {
   const t = text.toLowerCase();
   const has = (kws: string[]) => kws.some((k) => t.includes(k));
   return {
     hero:
       has(["get started", "try free", "start now", "learn more", "sign up"]) ||
-      t.split(" ").length > 30, // rough
+      t.split(" ").length > 30,
     value_prop: has([
       "benefit",
       "why",
@@ -58,9 +50,12 @@ function detectSections(text: string) {
     footer: has(["privacy", "terms", "©"]),
   };
 }
+function buildScreenshotUrl(url: string): string | null {
+  const tmpl = process.env.SCREENSHOT_URL_TMPL; // e.g. https://image.thum.io/get/width/1200/{URL}
+  return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
+}
 
-/** --- OpenAI prompt schema --- */
-const schema = {
+const jsonSchema = {
   name: "cro_full_report",
   schema: {
     type: "object",
@@ -114,7 +109,7 @@ const schema = {
         items: {
           type: "object",
           properties: {
-            section: { type: "string" }, // hero, value_prop, social_proof, pricing, features, faq, contact, footer
+            section: { type: "string" },
             status: { type: "string", enum: ["ok", "weak", "missing"] },
             rationale: { type: "string" },
             suggestions: {
@@ -134,41 +129,63 @@ const schema = {
   strict: true,
 } as const;
 
-/** --- Handler --- */
+/** ---------- main handler ---------- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "POST")
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
-    const { url: rawUrl, mode = "free" } = (req.body || {}) as {
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const { url: rawUrl, mode = "free" } = body as {
       url?: string;
       mode?: "free" | "full";
     };
-    if (!rawUrl || typeof rawUrl !== "string")
-      return res.status(400).json({ error: "Missing 'url'" });
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res
+        .status(500)
+        .json({ error: "OPENAI_API_KEY is not set on the server" });
+    }
+    if (!rawUrl || typeof rawUrl !== "string") {
+      return res.status(400).json({ error: "Missing 'url' (string)" });
+    }
 
     const url = normalizeUrl(rawUrl);
-    const pageResp = await fetch(url, {
-      headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
-      redirect: "follow",
-    });
-    if (!pageResp.ok)
+
+    // Fetch page HTML with clear error messaging
+    let html: string;
+    try {
+      const pageResp = await fetch(url, {
+        headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
+        redirect: "follow",
+      });
+      if (!pageResp.ok) {
+        return res
+          .status(400)
+          .json({
+            error: `Fetch failed: ${pageResp.status} ${pageResp.statusText}`,
+          });
+      }
+      html = await pageResp.text();
+    } catch (e: any) {
+      console.error("FETCH_ERR", e);
       return res
         .status(400)
-        .json({ error: `Fetch failed: ${pageResp.status}` });
-    const html = await pageResp.text();
+        .json({ error: `Failed to fetch URL: ${e?.message || e}` });
+    }
 
     const title = extractTitle(html);
     const text = extractText(html);
     const sections = detectSections(text);
-
-    // Build assets (screenshots) if template is present
     const screenshotUrl = buildScreenshotUrl(url);
     const suggestedUrl = screenshotUrl; // dev: reuse
 
-    // Build system/user messages for OpenAI
     const system =
       "You are a CRO expert. Analyze landing page copy and structure. Return STRICT JSON matching the provided schema.";
+
     const userContent =
       mode === "free"
         ? `Mode: FREE
@@ -184,40 +201,56 @@ TITLE: ${title || "(none)"}
 TEXT (truncated):
 ${text}`;
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const resp = await openai.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: userContent },
-        { role: "user", content: "Return JSON only that matches the schema." },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          json_schema: schema,
-        },
-      },
-      max_output_tokens: 1400,
-    });
-
-    // @ts-ignore - compatibility shim
-    const txt =
-      // For the Responses API in the new format:
-const txt = resp.output_text || JSON.stringify(resp.output?.[0]?.content?.[0]?.text || resp);
-
-
-    let data: any;
+    // OpenAI call with robust parsing + explicit JSON schema
+    let data: any = null;
     try {
-      data = JSON.parse(txt);
-    } catch {
-      data = {
-        score: 65,
-        summary: "Model returned non-JSON; using fallback.",
-        key_findings: [],
-        quick_wins: [],
-        findings: [],
-      };
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const resp = await openai.responses.create({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: userContent },
+          {
+            role: "user",
+            content: "Return JSON only that matches the schema.",
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            json_schema: jsonSchema,
+          },
+        },
+        max_output_tokens: 1400,
+      });
+
+      // Extract text robustly across SDK variants
+      // @ts-ignore
+      const raw =
+        resp.output_text ??
+        // @ts-ignore
+        resp.output?.[0]?.content?.[0]?.text ??
+        (typeof (resp as any).content === "string"
+          ? (resp as any).content
+          : null);
+
+      if (!raw || typeof raw !== "string") {
+        throw new Error("OpenAI returned no text content");
+      }
+
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        // Sometimes the model may wrap code fences or include stray chars
+        const cleaned = raw.replace(/^[\s`]*\{/, "{").replace(/\}[\s`]*$/, "}");
+        data = JSON.parse(cleaned);
+      }
+    } catch (e: any) {
+      console.error("OPENAI_ERR", e);
+      const status = e?.status || e?.code === "insufficient_quota" ? 429 : 502;
+      return res.status(status).json({
+        error: e?.message || e?.error?.message || "OpenAI request failed",
+      });
     }
 
     const payload = {
@@ -229,14 +262,10 @@ const txt = resp.output_text || JSON.stringify(resp.output?.[0]?.content?.[0]?.t
         suggested_screenshot_url: suggestedUrl,
       },
     };
-
     return res.status(200).json(payload);
   } catch (err: any) {
-    console.error(err);
-    // surface 429 nicely to the client
-    const code =
-      err?.status === 429 || err?.code === "insufficient_quota" ? 429 : 500;
-    return res.status(code).json({ error: err?.message || "Internal error" });
+    console.error("UNCAUGHT_ERR", err);
+    return res.status(500).json({ error: err?.message || "Internal error" });
   }
 }
 
