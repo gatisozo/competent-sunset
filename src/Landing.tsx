@@ -1,4 +1,3 @@
-// src/Landing.tsx
 import React, { useRef, useState } from "react";
 import { analyzeUrl } from "./lib/analyze";
 import type {
@@ -25,12 +24,12 @@ export default function Landing() {
   const [emailError, setEmailError] = useState("");
   const [emailSubmitted, setEmailSubmitted] = useState(false);
 
-  // AI report state
+  // AI report
   const [report, setReport] = useState<CroReport | null>(null);
   const [aiError, setAiError] = useState("");
   const [retryIn, setRetryIn] = useState<number | null>(null);
 
-  // progress demo → animated fallback score
+  // progress demo → animated fallback “grade”
   const fallbackScore = 72;
   const animatedScore = Math.min(
     fallbackScore,
@@ -63,7 +62,7 @@ export default function Landing() {
         100
       );
 
-      // fetch real AI (free mode)
+      // fetch AI (FREE mode)
       try {
         const freeReport = await analyzeUrl(url, "free");
         setReport(freeReport);
@@ -134,7 +133,8 @@ export default function Landing() {
           report && typeof (report as any).score === "number"
             ? (report as any).score
             : undefined,
-        message: "Request free scorecard from Holbox AI",
+        message: "Request free website scorecard from Holbox AI",
+        subject: "Your Holbox AI Website Scorecard",
       };
 
       const res = await fetch(EMAIL_ENDPOINT_URL, {
@@ -153,12 +153,11 @@ export default function Landing() {
     }
   };
 
-  // Dev flow to /full
+  // Dev flow → /full
   const handleOrderFullAudit = () => {
     const dest = "/full?url=" + encodeURIComponent(url || "") + "&dev=1";
     window.location.href = dest;
   };
-
   const handleSeeSample = () => {
     window.location.href = "/full?sample=1";
   };
@@ -168,7 +167,6 @@ export default function Landing() {
     report && typeof (report as any).score === "number"
       ? ((report as any).score as number)
       : null;
-
   const sections: SectionPresence | undefined = report?.sections_detected;
   const heroSuggestions: Suggestion[] =
     (report as FreeReport)?.hero?.suggestions || [];
@@ -285,7 +283,7 @@ export default function Landing() {
             <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
-                No registration
+                No sign-up needed
               </div>
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -321,15 +319,33 @@ export default function Landing() {
               </div>
             )}
             {showResults && (
-              <div className="h-48 md:h-56 rounded-xl bg-slate-100 border border-slate-200 grid place-items-center text-slate-600">
-                Analysis complete — see Preview below
+              <div className="h-48 md:h-56 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden">
+                {screenshotUrl ? (
+                  <img
+                    src={screenshotUrl}
+                    alt="Hero snapshot"
+                    className="w-full h-full object-cover object-top"
+                  />
+                ) : (
+                  <div className="w-full h-full grid place-items-center text-slate-600">
+                    Analysis complete — see Preview below
+                  </div>
+                )}
               </div>
             )}
             <p className="mt-3 md:mt-4 text-slate-700 text-sm">
-              This panel shows the current state of the audit (placeholder →
-              analyzing → complete).
+              This panel shows a top-of-page snapshot after the test completes.
             </p>
           </div>
+        </div>
+
+        {/* badges row image */}
+        <div className="relative mx-auto max-w-6xl px-4 pb-8">
+          <img
+            src="/badges.png"
+            alt="Badges"
+            className="w-full h-auto rounded-xl border shadow-sm"
+          />
         </div>
       </section>
 
@@ -388,11 +404,13 @@ export default function Landing() {
                         {Object.entries(sections).map(([k, v]) => (
                           <div key={k} className="flex items-center gap-2">
                             <span
-                              className={`h-2 w-2 rounded-full ${
-                                v ? "bg-emerald-500" : "bg-slate-300"
-                              }`}
+                              className={
+                                v
+                                  ? "h-2 w-2 rounded-full bg-emerald-500"
+                                  : "h-2 w-2 rounded-full bg-slate-300"
+                              }
                             />
-                            <span className={`${v ? "" : "text-slate-400"}`}>
+                            <span className={v ? "" : "text-slate-400"}>
                               {k.split("_").join(" ")}
                             </span>
                           </div>
@@ -453,7 +471,7 @@ export default function Landing() {
         )}
       </section>
 
-      {/* EMAIL GATE (Scorecard) */}
+      {/* SCORECARD (email gate) */}
       <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
           <div>
