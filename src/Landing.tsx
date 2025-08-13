@@ -1,3 +1,4 @@
+// src/Landing.tsx
 import React, { useRef, useState } from "react";
 import { analyzeUrl } from "./lib/analyze";
 import type {
@@ -24,12 +25,12 @@ export default function Landing() {
   const [emailError, setEmailError] = useState("");
   const [emailSubmitted, setEmailSubmitted] = useState(false);
 
-  // AI report
+  // AI report state
   const [report, setReport] = useState<CroReport | null>(null);
   const [aiError, setAiError] = useState("");
   const [retryIn, setRetryIn] = useState<number | null>(null);
 
-  // progress demo → animated fallback “grade”
+  // progress demo → animated fallback grade
   const fallbackScore = 72;
   const animatedScore = Math.min(
     fallbackScore,
@@ -54,11 +55,7 @@ export default function Landing() {
       setLoading(false);
       setShowResults(true);
       setTimeout(
-        () =>
-          previewRef.current?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          }),
+        () => previewRef.current?.scrollIntoView({ behavior: "smooth" }),
         100
       );
 
@@ -70,7 +67,6 @@ export default function Landing() {
         const msg = String(e?.message || "AI error");
         setAiError(msg);
 
-        // basic retry if 429
         if (msg.includes("429")) {
           let t = 10;
           setRetryIn(t);
@@ -133,8 +129,9 @@ export default function Landing() {
           report && typeof (report as any).score === "number"
             ? (report as any).score
             : undefined,
-        message: "Request free website scorecard from Holbox AI",
         subject: "Your Holbox AI Website Scorecard",
+        message:
+          "Requesting my free website scorecard from Holbox AI (top weaknesses + quick fixes).",
       };
 
       const res = await fetch(EMAIL_ENDPOINT_URL, {
@@ -172,8 +169,6 @@ export default function Landing() {
     (report as FreeReport)?.hero?.suggestions || [];
   const nextSuggestions: Suggestion[] =
     (report as FreeReport)?.next_section?.suggestions || [];
-  const screenshotUrl: string | undefined | null =
-    report?.assets?.screenshot_url;
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -245,7 +240,7 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* HERO */}
+      {/* HERO (bez preview kastes labajā pusē) */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] to-[#83C5BE]" />
         <div className="relative mx-auto max-w-6xl px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
@@ -258,7 +253,7 @@ export default function Landing() {
               an action plan to hold your team accountable.
             </p>
 
-            <div className="mt-4 md:mt-6 hidden md:flex flex-col sm:flex-row gap-3">
+            <div className="mt-4 md:mt-6">
               <form
                 onSubmit={handleRunTestSubmit}
                 className="flex w-full flex-col sm:flex-row gap-3"
@@ -280,10 +275,14 @@ export default function Landing() {
               </form>
             </div>
 
-            <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm">
+            <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-4 text-white/90 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
                 No sign-up needed
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-white/80" />
+                No credit card required
               </div>
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -295,57 +294,6 @@ export default function Landing() {
               </div>
             </div>
           </div>
-
-          <div className="bg-white/80 rounded-2xl p-5 md:p-6 shadow-xl">
-            {!loading && !showResults && (
-              <div className="h-48 md:h-56 rounded-xl bg-slate-100 border border-slate-200 grid place-items-center text-slate-500">
-                Hero Preview Placeholder
-              </div>
-            )}
-            {loading && (
-              <div className="h-48 md:h-56 rounded-xl bg-white/90 border border-slate-200 p-5 flex flex-col justify-center">
-                <div className="text-slate-700 font-medium">
-                  Analyzing your site…
-                </div>
-                <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
-                  <div
-                    className="h-full bg-[#006D77] transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-                <div className="mt-2 text-sm text-slate-100/90">
-                  Estimated grade: {animatedScore}/100
-                </div>
-              </div>
-            )}
-            {showResults && (
-              <div className="h-48 md:h-56 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden">
-                {screenshotUrl ? (
-                  <img
-                    src={screenshotUrl}
-                    alt="Hero snapshot"
-                    className="w-full h-full object-cover object-top"
-                  />
-                ) : (
-                  <div className="w-full h-full grid place-items-center text-slate-600">
-                    Analysis complete — see Preview below
-                  </div>
-                )}
-              </div>
-            )}
-            <p className="mt-3 md:mt-4 text-slate-700 text-sm">
-              This panel shows a top-of-page snapshot after the test completes.
-            </p>
-          </div>
-        </div>
-
-        {/* badges row image */}
-        <div className="relative mx-auto max-w-6xl px-4 pb-8">
-          <img
-            src="/badges.png"
-            alt="Badges"
-            className="w-full h-auto rounded-xl border shadow-sm"
-          />
         </div>
       </section>
 
@@ -457,16 +405,6 @@ export default function Landing() {
                 </div>
               </div>
             )}
-
-            {screenshotUrl && (
-              <div className="rounded-2xl border bg-white p-2 overflow-hidden">
-                <img
-                  src={screenshotUrl}
-                  alt="Screenshot"
-                  className="w-full h-auto block"
-                />
-              </div>
-            )}
           </div>
         )}
       </section>
@@ -516,12 +454,12 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PRICING */}
+      {/* PRICING (ar report preview + badges labajā kolonnā) */}
       <section
         id="pricing"
         className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16"
       >
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
+        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-start">
           <div>
             <h3 className="text-2xl md:text-3xl font-semibold">
               Full AI Report in 1–2 Minutes — Just $50
@@ -557,12 +495,24 @@ export default function Landing() {
               directly.
             </p>
           </div>
-          <div className="grid gap-3">
-            <div className="h-40 md:h-44 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
-              Report preview placeholder
+
+          {/* RIGHT column with images */}
+          <div className="grid gap-4">
+            {/* Report preview image */}
+            <div className="rounded-2xl border bg-slate-50 overflow-hidden">
+              <img
+                src="/report-1.png"
+                alt="Report preview"
+                className="w-full h-auto block"
+              />
             </div>
-            <div className="h-16 md:h-20 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
-              Metrics / badges
+            {/* Badges image */}
+            <div className="rounded-2xl border bg-slate-50 overflow-hidden">
+              <img
+                src="/badges.png"
+                alt="Metrics / badges"
+                className="w-full h-auto block"
+              />
             </div>
           </div>
         </div>
