@@ -12,10 +12,12 @@ function normalizeUrl(input: string): string {
   if (!s) throw new Error("Missing URL");
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 }
+
 function extractTitle(html: string): string | undefined {
   const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
   return m?.[1]?.trim();
 }
+
 function extractText(html: string, maxChars = 20000) {
   const noScript = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -26,6 +28,7 @@ function extractText(html: string, maxChars = 20000) {
     .trim();
   return text.slice(0, maxChars);
 }
+
 function detectSections(text: string) {
   const t = text.toLowerCase();
   const has = (kws: string[]) => kws.some((k) => t.includes(k));
@@ -55,14 +58,21 @@ function detectSections(text: string) {
     footer: has(["privacy", "terms", "©"]),
   };
 }
+
 function buildScreenshotUrl(url: string): string | null {
   const tmpl = process.env.SCREENSHOT_URL_TMPL; // e.g. https://image.thum.io/get/width/1200/{URL}
   return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
 }
 
-/** ---------- JSON schema for Responses API ---------- */
-// Tight JSON Schema for Responses API (all objects lock extra props)
-// Tight JSON Schema for Responses API (each object: additionalProperties=false and required includes ALL keys)
+function safeParse(s: string) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
+  }
+}
+
+/** ---------- Tight JSON Schema (all objects lock extra props; ALL top-level keys required) ---------- */
 const croSchema = {
   type: "object",
   properties: {
@@ -112,7 +122,7 @@ const croSchema = {
           eta_days: { type: "integer" },
           notes: { type: "string" },
         },
-        // Responses API expects 'required' to include EVERY key in 'properties'
+        // Responses API validator requires required[] to include EVERY defined property
         required: ["title", "impact", "effort", "eta_days", "notes"],
         additionalProperties: false,
       },
@@ -124,7 +134,7 @@ const croSchema = {
       items: {
         type: "object",
         properties: {
-          section: { type: "string" },
+          section: { type: "string" }, // hero, value_prop, social_proof, pricing, features, faq, contact, footer
           status: { type: "string", enum: ["ok", "weak", "missing"] },
           rationale: { type: "string" },
           suggestions: {
@@ -133,18 +143,26 @@ const croSchema = {
             maxItems: 5,
           },
         },
-        // Make all keys required to satisfy the validator
         required: ["section", "status", "rationale", "suggestions"],
         additionalProperties: false,
       },
       maxItems: 12,
     },
   },
-  required: ["score", "summary", "key_findings", "quick_wins", "findings"],
+  // IMPORTANT: make ALL top-level properties required per Responses API validation
+  required: [
+    "score",
+    "summary",
+    "key_findings",
+    "quick_wins",
+    "findings",
+    "prioritized_backlog",
+    "content_audit",
+  ],
   additionalProperties: false,
 } as const;
 
-/** ---------- handler ---------- */
+/** ---------- main handler ---------- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -206,13 +224,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userContent =
       mode === "free"
         ? `Mode: FREE
-Return a lean report (score, summary, 3-6 quick_wins, 3-8 findings, minimal content_audit).
+Return a lean but complete report (fill all required fields in the schema, but keep content concise).
 URL: ${url}
 TITLE: ${title || "(none)"}
 TEXT (truncated):
 ${text}`
         : `Mode: FULL
-Return a full report including content_audit (hero/value_prop/social_proof/pricing/features/faq/contact/footer), prioritized_backlog and detailed findings.
+Return a full report including content_audit (hero/value_prop/social_proof/pricing/features/faq/contact/footer) and prioritized_backlog. All required fields in the schema must be present.
 URL: ${url}
 TITLE: ${title || "(none)"}
 TEXT (truncated):
@@ -228,7 +246,7 @@ ${text}`;
           { role: "user", content: userContent },
           {
             role: "user",
-            content: "Return JSON only that matches the schema.",
+            content: "Return JSON only that matches the schema exactly.",
           },
         ],
         text: {
@@ -273,6 +291,7 @@ ${text}`;
       });
     }
 
+    // Merge non-LLM fields (kept out of schema)
     return json(res, 200, {
       ...data,
       sections_detected: sections,
@@ -287,14 +306,6 @@ ${text}`;
       error: err?.message || "Internal error",
       _debug: debug ? err : undefined,
     });
-  }
-}
-
-function safeParse(s: string) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return {};
   }
 }
 
