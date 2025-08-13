@@ -60,8 +60,11 @@ function detectSections(text: string) {
 }
 
 function buildScreenshotUrl(url: string): string | null {
-  const tmpl = process.env.SCREENSHOT_URL_TMPL; // e.g. https://image.thum.io/get/width/1200/{URL}
-  return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
+  return `${
+    process.env.VERCEL_URL?.startsWith("http")
+      ? process.env.VERCEL_URL
+      : "https://" + process.env.VERCEL_URL
+  }/api/screenshot?url=${encodeURIComponent(url)}`;
 }
 
 function safeParse(s: string) {
