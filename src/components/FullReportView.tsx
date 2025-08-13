@@ -117,6 +117,35 @@ export default function FullReportView() {
 
   const contentAudit: ContentAuditItem[] | undefined = (report as FullReport)
     ?.content_audit;
+  // Crop the image to the top (hero) using CSS – no external service needed
+  const heroCropWrap = "rounded-xl overflow-hidden border bg-white h-[520px]"; // adjust height as you like
+  const heroCropImg: React.CSSProperties = {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    objectPosition: "top", // <-- top crop (hero)
+  };
+
+  // Decide if a finding is hero-related (simple heuristic)
+  function isHeroFinding(title: string) {
+    const t = title.toLowerCase();
+    return (
+      t.includes("hero") ||
+      t.includes("above the fold") ||
+      t.includes("headline") ||
+      t.includes("cta")
+    );
+  }
+
+  // Only render a shot if at least one section actually needs work
+  function hasMeaningfulIssues(
+    findings: { title: string }[] = [],
+    contentAudit?: { section: string; status: "ok" | "weak" | "missing" }[]
+  ) {
+    const anyHeroFinding = findings.some((f) => isHeroFinding(f.title));
+    const anyWeak = (contentAudit || []).some((c) => c.status !== "ok");
+    return anyHeroFinding || anyWeak;
+  }
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900 print:bg-white">
@@ -351,49 +380,73 @@ export default function FullReportView() {
               )}
             </div>
 
-            {/* Visual: Before vs Suggested */}
-            {screenshotUrl && (
-              <div className="mt-6">
-                <div className="font-medium">
-                  Visual Preview — Before vs Suggested
-                </div>
-                <div className="grid md:grid-cols-2 gap-3 mt-2">
-                  <div className="rounded-xl overflow-hidden border bg-white">
-                    <div className="px-3 py-2 text-sm border-b">
-                      Before (current)
-                    </div>
-                    {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                    <img src={screenshotUrl} className="w-full h-auto block" />
-                  </div>
-                  <div className="rounded-xl overflow-hidden border bg-white relative">
-                    <div className="px-3 py-2 text-sm border-b">
-                      Suggested (annotated)
-                    </div>
-                    {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                    <img
-                      src={suggestedShot}
-                      className="w-full h-auto block opacity-95"
-                    />
-                    <div className="absolute right-2 bottom-2 bg-white/90 border rounded-lg p-2 text-xs max-w-[85%] shadow">
-                      <div className="font-medium mb-1">Top suggestions</div>
-                      <ul className="space-y-1">
-                        {(findings.slice(0, 3) as Suggestion[]).map((s, i) => (
-                          <li key={i}>
-                            • <b>{s.title}</b> — {s.recommendation}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  * In production this panel can render a truly annotated mockup
-                  image from the server.
-                </div>
+      {/* Visual: Hero Snapshot (cropped) */}
+{hasMeaningfulIssues(findings, contentAudit) && screenshotUrl && (
+  <div className="mt-6">
+    <div className="font-medium">Hero Snapshot (top of page)</div>
+    <div className="text-sm text-slate-600">
+      Cropped to the first viewport for clarity. Suggestions overlay shows the most impactful fixes.
+    </div>
+
+    {(() => {
+      const isSameShot = !suggestedShot || suggestedShot === screenshotUrl;
+      const topSuggestions = (findings as Suggestion[]).filter(f => isHeroFinding(f.title)).slice(0, 3);
+      const fallbackTop = (findings as Suggestion[]).slice(0, 3);
+      const overlayList = (topSuggestions.length ? topSuggestions : fallbackTop);
+
+      if (isSameShot) {
+        // Single image with overlay (avoid duplicates)
+        return (
+          <div className={`${heroCropWrap} relative mt-2`}>
+            {/* eslint-disable-next-line jsx-a11y/alt-text */}
+            <img src={screenshotUrl} style={heroCropImg} />
+            {overlayList.length > 0 && (
+              <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                <div className="font-medium mb-1">Top hero suggestions</div>
+                <ul className="space-y-1">
+                  {overlayList.map((s, i) => (
+                    <li key={i}>• <b>{s.title}</b> — {s.recommendation}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // Two images only if suggested != original (future: real annotated mockup)
+      return (
+        <div className="grid md:grid-cols-2 gap-3 mt-2">
+          <div className={heroCropWrap}>
+            <div className="px-3 py-2 text-sm border-b">Before (current)</div>
+            {/* eslint-disable-next-line jsx-a11y/alt-text */}
+            <img src={screenshotUrl} style={heroCropImg} />
+          </div>
+          <div className={`${heroCropWrap} relative`}>
+            <div className="px-3 py-2 text-sm border-b">Suggested</div>
+            {/* eslint-disable-next-line jsx-a11y/alt-text */}
+            <img src={suggestedShot || screenshotUrl} style={heroCropImg} />
+            {overlayList.length > 0 && (
+              <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                <div className="font-medium mb-1">Top hero suggestions</div>
+                <ul className="space-y-1">
+                  {overlayList.map((s, i) => (
+                    <li key={i}>• <b>{s.title}</b> — {s.recommendation}</li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
         </div>
+      );
+    })()}
+
+    <div className="mt-1 text-xs text-slate-500">
+      * We show only sections with issues. For now we crop to the hero; more precise element crops can be added later.
+    </div>
+  </div>
+)}
+
 
         {error && (
           <div className="mt-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-800">
