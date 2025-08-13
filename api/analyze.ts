@@ -62,6 +62,7 @@ function buildScreenshotUrl(url: string): string | null {
 
 /** ---------- JSON schema for Responses API ---------- */
 // Tight JSON Schema for Responses API (all objects lock extra props)
+// Tight JSON Schema for Responses API (each object: additionalProperties=false and required includes ALL keys)
 const croSchema = {
   type: "object",
   properties: {
@@ -78,7 +79,7 @@ const croSchema = {
           recommendation: { type: "string" },
         },
         required: ["title", "impact", "recommendation"],
-        additionalProperties: false, // <—
+        additionalProperties: false,
       },
       maxItems: 8,
     },
@@ -95,7 +96,7 @@ const croSchema = {
           recommendation: { type: "string" },
         },
         required: ["title", "impact", "recommendation"],
-        additionalProperties: false, // <—
+        additionalProperties: false,
       },
       maxItems: 20,
     },
@@ -111,8 +112,9 @@ const croSchema = {
           eta_days: { type: "integer" },
           notes: { type: "string" },
         },
-        required: ["title", "impact", "effort"],
-        additionalProperties: false, // <—
+        // Responses API expects 'required' to include EVERY key in 'properties'
+        required: ["title", "impact", "effort", "eta_days", "notes"],
+        additionalProperties: false,
       },
       maxItems: 12,
     },
@@ -122,7 +124,7 @@ const croSchema = {
       items: {
         type: "object",
         properties: {
-          section: { type: "string" }, // e.g. "hero"
+          section: { type: "string" },
           status: { type: "string", enum: ["ok", "weak", "missing"] },
           rationale: { type: "string" },
           suggestions: {
@@ -131,14 +133,15 @@ const croSchema = {
             maxItems: 5,
           },
         },
-        required: ["section", "status"],
-        additionalProperties: false, // <—
+        // Make all keys required to satisfy the validator
+        required: ["section", "status", "rationale", "suggestions"],
+        additionalProperties: false,
       },
       maxItems: 12,
     },
   },
   required: ["score", "summary", "key_findings", "quick_wins", "findings"],
-  additionalProperties: false, // <— keep at top level too
+  additionalProperties: false,
 } as const;
 
 /** ---------- handler ---------- */
