@@ -55,78 +55,74 @@ function buildScreenshotUrl(url: string): string | null {
   return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
 }
 
-const jsonSchema = {
-  name: "cro_full_report",
-  schema: {
-    type: "object",
-    properties: {
-      score: { type: "integer", minimum: 0, maximum: 100 },
-      summary: { type: "string" },
-      key_findings: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            impact: { type: "string", enum: ["high", "medium", "low"] },
-            recommendation: { type: "string" },
-          },
-          required: ["title", "impact", "recommendation"],
+const croSchema = {
+  type: "object",
+  properties: {
+    score: { type: "integer", minimum: 0, maximum: 100 },
+    summary: { type: "string" },
+    key_findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "string", enum: ["high", "medium", "low"] },
+          recommendation: { type: "string" },
         },
-        maxItems: 8,
+        required: ["title", "impact", "recommendation"],
       },
-      quick_wins: { type: "array", items: { type: "string" }, maxItems: 6 },
-      findings: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            impact: { type: "string", enum: ["high", "medium", "low"] },
-            recommendation: { type: "string" },
-          },
-          required: ["title", "impact", "recommendation"],
-        },
-        maxItems: 20,
-      },
-      prioritized_backlog: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            impact: { type: "integer", minimum: 1, maximum: 3 },
-            effort: { type: "integer", minimum: 1, maximum: 3 },
-            eta_days: { type: "integer" },
-            notes: { type: "string" },
-          },
-          required: ["title", "impact", "effort"],
-        },
-        maxItems: 12,
-      },
-      content_audit: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            section: { type: "string" },
-            status: { type: "string", enum: ["ok", "weak", "missing"] },
-            rationale: { type: "string" },
-            suggestions: {
-              type: "array",
-              items: { type: "string" },
-              maxItems: 5,
-            },
-          },
-          required: ["section", "status"],
-        },
-        maxItems: 12,
-      },
+      maxItems: 8,
     },
-    required: ["score", "summary", "key_findings", "quick_wins", "findings"],
-    additionalProperties: false,
+    quick_wins: { type: "array", items: { type: "string" }, maxItems: 6 },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "string", enum: ["high", "medium", "low"] },
+          recommendation: { type: "string" },
+        },
+        required: ["title", "impact", "recommendation"],
+      },
+      maxItems: 20,
+    },
+    prioritized_backlog: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "integer", minimum: 1, maximum: 3 },
+          effort: { type: "integer", minimum: 1, maximum: 3 },
+          eta_days: { type: "integer" },
+          notes: { type: "string" },
+        },
+        required: ["title", "impact", "effort"],
+      },
+      maxItems: 12,
+    },
+    content_audit: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          section: { type: "string" },
+          status: { type: "string", enum: ["ok", "weak", "missing"] },
+          rationale: { type: "string" },
+          suggestions: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: 5,
+          },
+        },
+        required: ["section", "status"],
+      },
+      maxItems: 12,
+    },
   },
-  strict: true,
+  required: ["score", "summary", "key_findings", "quick_wins", "findings"],
+  additionalProperties: false,
 } as const;
 
 /** ---------- main handler ---------- */
@@ -203,6 +199,7 @@ ${text}`;
     let data: any = null;
     try {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
       const resp = await openai.responses.create({
         model: process.env.OPENAI_MODEL || "gpt-4o-mini",
         input: [
@@ -216,12 +213,9 @@ ${text}`;
         text: {
           format: {
             type: "json_schema",
-            name: "cro_full_report", // <-- REQUIRED at this level
-            json_schema: {
-              // keep your existing schema here
-              schema: jsonSchema.schema, // or inline the schema
-              strict: true,
-            },
+            name: "cro_full_report",
+            schema: croSchema, // <-- note: schema (not json_schema)
+            strict: true,
           },
         },
         max_output_tokens: 1400,
@@ -229,32 +223,23 @@ ${text}`;
 
       // Extract text robustly across SDK variants
       // @ts-ignore
-      const raw =
-        resp.output_text ??
-        // @ts-ignore
-        resp.output?.[0]?.content?.[0]?.text ??
-        (typeof (resp as any).content === "string"
-          ? (resp as any).content
-          : null);
+     // @ts-ignore: SDK variants
+const raw =
+resp.output_text ??
+// @ts-ignore
+resp.output?.[0]?.content?.[0]?.text ??
+(typeof (resp as any).content === "string" ? (resp as any).content : null);
 
-      if (!raw || typeof raw !== "string") {
-        throw new Error("OpenAI returned no text content");
-      }
+if (!raw || typeof raw !== "string") throw new Error("OpenAI returned no text content");
 
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        // Sometimes the model may wrap code fences or include stray chars
-        const cleaned = raw.replace(/^[\s`]*\{/, "{").replace(/\}[\s`]*$/, "}");
-        data = JSON.parse(cleaned);
-      }
-    } catch (e: any) {
-      console.error("OPENAI_ERR", e);
-      const status = e?.status || e?.code === "insufficient_quota" ? 429 : 502;
-      return res.status(status).json({
-        error: e?.message || e?.error?.message || "OpenAI request failed",
-      });
-    }
+let data: any;
+try {
+data = JSON.parse(raw);
+} catch {
+const cleaned = raw.replace(/^[\s`]*\{/, "{").replace(/\}[\s`]*$/, "}");
+data = JSON.parse(cleaned);
+}
+
 
     const payload = {
       ...data,
