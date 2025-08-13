@@ -186,20 +186,26 @@ ${text}`;
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const resp = await openai.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini", // cheap default
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       input: [
         { role: "system", content: system },
         { role: "user", content: userContent },
         { role: "user", content: "Return JSON only that matches the schema." },
       ],
-      response_format: { type: "json_schema", json_schema: schema },
+      text: {
+        format: {
+          type: "json_schema",
+          json_schema: schema,
+        },
+      },
       max_output_tokens: 1400,
     });
 
     // @ts-ignore - compatibility shim
     const txt =
-      resp.output_text ||
-      JSON.stringify(resp.output?.[0]?.content?.[0]?.text || resp);
+      // For the Responses API in the new format:
+const txt = resp.output_text || JSON.stringify(resp.output?.[0]?.content?.[0]?.text || resp);
+
 
     let data: any;
     try {
