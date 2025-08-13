@@ -1,56 +1,44 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  analyzeUrl,
-  normalizeUrl,
-  type CroReport,
+  analyzeUrl, // kept for non-stream fallback if needed
   type FullReport,
   type Suggestion,
   type ContentAuditItem,
 } from "../lib/analyze";
 
-/* -------------------------------------------------------
-   Small utilities
-------------------------------------------------------- */
+/* ---------------- utilities ---------------- */
 function getQS(name: string): string | null {
   if (typeof window === "undefined") return null;
   const m = new URLSearchParams(window.location.search).get(name);
   return m ? decodeURIComponent(m) : null;
 }
-
 function clsx(...a: Array<string | false | null | undefined>) {
   return a.filter(Boolean).join(" ");
 }
-
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
-
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);
 }
-
-function impactChip(impact?: "high" | "medium" | "low") {
-  const map: Record<string, string> = {
-    high: "bg-red-100 text-red-700",
-    medium: "bg-amber-100 text-amber-700",
-    low: "bg-emerald-100 text-emerald-700",
+function animateNumber(
+  setter: (n: number) => void,
+  from: number,
+  to: number,
+  ms = 900
+) {
+  const start = performance.now(),
+    delta = to - from;
+  const tick = (now: number) => {
+    const t = clamp((now - start) / ms, 0, 1);
+    const eased = easeOutCubic(t);
+    setter(from + delta * eased);
+    if (t < 1) requestAnimationFrame(tick);
   };
-  const txt = (impact || "low").toUpperCase();
-  return (
-    <span
-      className={clsx(
-        "px-2 py-0.5 rounded text-xs font-medium",
-        map[impact || "low"]
-      )}
-    >
-      {txt}
-    </span>
-  );
+  requestAnimationFrame(tick);
 }
 
-/* -------------------------------------------------------
-   Screenshot logic (hero-only crop & duplicate avoidance)
-------------------------------------------------------- */
+/* -------------- hero image crop -------------- */
 const heroCropWrap = "rounded-xl overflow-hidden border bg-white h-[520px]";
 const heroCropImg: React.CSSProperties = {
   width: "100%",
@@ -58,8 +46,6 @@ const heroCropImg: React.CSSProperties = {
   objectFit: "cover",
   objectPosition: "top",
 };
-
-// Heuristic: is a finding related to the hero?
 function isHeroFinding(title: string) {
   const t = title.toLowerCase();
   return (
@@ -70,180 +56,50 @@ function isHeroFinding(title: string) {
     t.includes("primary button")
   );
 }
-
 function hasMeaningfulIssues(
   findings: { title: string }[] = [],
-  contentAudit?: { section: string; status: "ok" | "weak" | "missing" }[]
+  audit?: { section: string; status: "ok" | "weak" | "missing" }[]
 ) {
-  const anyHeroFinding = findings.some((f) => isHeroFinding(f.title));
-  const anyWeak = (contentAudit || []).some((c) => c.status !== "ok");
-  return anyHeroFinding || anyWeak;
+  const hf = findings.some((f) => isHeroFinding(f.title));
+  const wk = (audit || []).some((c) => c.status !== "ok");
+  return hf || wk;
 }
 
-/* -------------------------------------------------------
-   Scoring (client-side)
-   - Start from 100, subtract penalties by impact and section status.
-------------------------------------------------------- */
+/* -------------- scoring -------------- */
 function computeScore(
   findings: Suggestion[] = [],
-  contentAudit: ContentAuditItem[] = []
+  audit: ContentAuditItem[] = []
 ) {
   let score = 100;
-
-  // Findings penalties
-  for (const f of findings) {
-    if (f.impact === "high") score -= 10;
-    else if (f.impact === "medium") score -= 5;
-    else score -= 2;
-  }
-
-  // Content audit penalties
-  for (const c of contentAudit) {
-    if (c.status === "missing") score -= 5;
-    else if (c.status === "weak") score -= 2;
-  }
-
+  for (const f of findings)
+    score -= f.impact === "high" ? 10 : f.impact === "medium" ? 5 : 2;
+  for (const c of audit)
+    score -= c.status === "missing" ? 5 : c.status === "weak" ? 2 : 0;
   return clamp(Math.round(score), 0, 100);
 }
-
-/* -------------------------------------------------------
-   Conversion lift mapping for backlog
-------------------------------------------------------- */
 const impactToLift: Record<number, string> = {
   3: "≈ +20% leads",
   2: "≈ +10% leads",
   1: "≈ +5% leads",
 };
 
-/* -------------------------------------------------------
-   Minimal sample (for /full?sample=1)
-------------------------------------------------------- */
-const sampleReport: FullReport = {
-  score: 75,
-  summary:
-    "Solid structure overall. Main gaps are unclear hero value, weak CTA emphasis on mobile, and lack of trust badges above the fold.",
-  key_findings: [
-    {
-      title: "Hero value unclear on mobile — hero",
-      impact: "low",
-      recommendation: "Shorten headline and keep CTA in the first viewport.",
-    },
-    {
-      title: "Primary CTA low contrast — hero",
-      impact: "low",
-      recommendation: "Increase color contrast and add hover/focus styles.",
-    },
-  ],
-  quick_wins: [
-    "Compress hero image",
-    "Move CTA above fold",
-    "Add social proof",
-  ],
-  findings: [
-    {
-      title: "LCP image oversized — performance",
-      impact: "medium",
-      recommendation:
-        "Serve responsive images (srcset) and preload hero asset.",
-    },
-  ],
-  prioritized_backlog: [
-    {
-      title: "Fix hero value + CTA",
-      impact: 3,
-      effort: 1,
-      eta_days: 1,
-      notes: "Copy + button styles",
-    },
-    {
-      title: "Responsive hero image",
-      impact: 3,
-      effort: 2,
-      eta_days: 2,
-      notes: "srcset + preload",
-    },
-  ],
-  content_audit: [
-    {
-      section: "hero",
-      status: "weak",
-      rationale: "Headline not benefit-driven; CTA not visible on mobile.",
-      suggestions: [
-        "Rewrite headline with value",
-        "Place CTA above the fold on mobile",
-      ],
-    },
-    {
-      section: "value_prop",
-      status: "ok",
-      rationale: "Bullet benefits present and scannable.",
-      suggestions: ["Add a stat/certification to boost credibility"],
-    },
-    {
-      section: "social_proof",
-      status: "missing",
-      rationale: "No testimonials or trust badges detected.",
-      suggestions: [
-        "Add 2–3 testimonials",
-        "Partner/media logos above the fold",
-      ],
-    },
-  ],
-  sections_detected: {
-    hero: true,
-    value_prop: true,
-    social_proof: false,
-    pricing: false,
-    features: true,
-    faq: true,
-    contact: true,
-    footer: true,
-  },
-  page: {
-    url: "https://example.com",
-    title: "Example — demo",
-  },
-  assets: {
-    screenshot_url:
-      "https://s.wordpress.com/mshots/v1/https%3A%2F%2Fexample.com?w=1200",
-    suggested_screenshot_url:
-      "https://s.wordpress.com/mshots/v1/https%3A%2F%2Fexample.com?w=1200",
-  },
-};
-
-/* -------------------------------------------------------
-   Component
-------------------------------------------------------- */
+/* -------------- component -------------- */
 export default function FullReportView() {
-  const [url, setUrl] = useState<string>(() => getQS("url") || "menopauze.lv");
+  const [url, setUrl] = useState<string>(() => getQS("url") || "");
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0); // 0..100 while loading
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string>("");
   const [report, setReport] = useState<FullReport | null>(null);
+  const [displayScore, setDisplayScore] = useState(0);
 
-  const [displayScore, setDisplayScore] = useState(0); // animated number
-
-  const sample = getQS("sample") === "1";
-
-  // first load: sample or real
+  // analyze on load only if url exists in QS
   useEffect(() => {
-    if (sample) {
-      setReport(sampleReport);
-      // animate to sample computed score
-      const target = computeScore(
-        sampleReport.findings,
-        sampleReport.content_audit || []
-      );
-      animateNumber(setDisplayScore, displayScore, target, 900);
-      return;
-    }
-    if (url) {
-      handleAnalyze("free");
-    }
+    const qsUrl = getQS("url");
+    if (qsUrl) startStreaming(qsUrl, "full");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Animate score any time report changes
+  // re-animate score when report arrives
   useEffect(() => {
     if (!report) return;
     const target = computeScore(report.findings, report.content_audit || []);
@@ -251,39 +107,69 @@ export default function FullReportView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report]);
 
-  // Fake progress while waiting for API (fills to 90%, then 100% on finish)
-  useEffect(() => {
-    if (!loading) return;
-    setProgress(0);
-    let p = 0;
-    const id = setInterval(() => {
-      p = Math.min(90, p + Math.random() * 6 + 2); // smooth-ish
-      setProgress(Math.floor(p));
-    }, 200);
-    return () => clearInterval(id);
-  }, [loading]);
-
-  async function handleAnalyze(mode: "free" | "full" = "full") {
+  /* ---------- streaming ---------- */
+  function startStreaming(u: string, mode: "free" | "full" = "full") {
     try {
       setLoading(true);
       setError("");
-      const r = (await analyzeUrl(url, mode)) as FullReport;
-      setReport(r);
-      setProgress(100); // finish the bar
-    } catch (e: any) {
-      setError(e?.message || "Analyze failed");
       setProgress(0);
-    } finally {
-      // small delay helps UX to see bar touch 100
-      setTimeout(() => setLoading(false), 250);
+      setReport(null);
+
+      const base = "/api/analyze-stream";
+      const src = `${base}?url=${encodeURIComponent(
+        u
+      )}&mode=${mode}&sid=${Date.now()}`;
+
+      const es = new EventSource(src);
+
+      es.addEventListener("progress", (e: any) => {
+        try {
+          const { value } = JSON.parse(e.data);
+          setProgress(value ?? 0);
+        } catch {}
+      });
+      es.addEventListener("result", (e: any) => {
+        try {
+          const data = JSON.parse(e.data);
+          setReport(data);
+          setProgress(100);
+        } catch (err: any) {
+          setError("Invalid result format");
+        } finally {
+          es.close();
+          setLoading(false);
+        }
+      });
+      es.addEventListener("error", (e: any) => {
+        try {
+          const data = e.data ? JSON.parse(e.data) : null;
+          setError(data?.message || "Stream error");
+        } catch {
+          setError("Stream error");
+        } finally {
+          es.close();
+          setLoading(false);
+        }
+      });
+      // network errors also trigger onerror without .data
+      es.onerror = () => {
+        /* handled above */
+      };
+    } catch (err: any) {
+      setError(err?.message || "Could not start stream");
+      setLoading(false);
     }
   }
 
-  // Enable Enter on the URL input
+  /* ---------- handlers ---------- */
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") handleAnalyze("full");
+    if (e.key === "Enter" && url.trim()) startStreaming(url.trim(), "full");
+  };
+  const runAnalyze = () => {
+    if (url.trim()) startStreaming(url.trim(), "full");
   };
 
+  /* ---------- derived ---------- */
   const findings = (report?.findings || []) as Suggestion[];
   const contentAudit = report?.content_audit as ContentAuditItem[] | undefined;
   const screenshotUrl = report?.assets?.screenshot_url || null;
@@ -293,6 +179,12 @@ export default function FullReportView() {
     const heroOnes = findings.filter((f) => isHeroFinding(f.title));
     return (heroOnes.length ? heroOnes : findings).slice(0, 3);
   }, [findings]);
+
+  // Quick-wins overall lift = 3% per item (cap 30%) — visible big pill
+  const quickWinsLiftPct = useMemo(() => {
+    const n = report?.quick_wins?.length ?? 0;
+    return Math.min(30, n * 3);
+  }, [report?.quick_wins]);
 
   return (
     <div className="mx-auto max-w-6xl px-3 md:px-4 py-8">
@@ -327,14 +219,14 @@ export default function FullReportView() {
           />
           <button
             disabled={loading || !url.trim()}
-            onClick={() => handleAnalyze("full")}
+            onClick={runAnalyze}
             className="rounded-lg px-4 py-2 bg-[#006D77] text-white disabled:opacity-60"
           >
             {loading ? "Analyzing…" : "Analyze"}
           </button>
         </div>
 
-        {/* Progress bar */}
+        {/* Streaming progress */}
         {loading && (
           <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
             <div
@@ -460,7 +352,20 @@ export default function FullReportView() {
                     key={i}
                     className="p-4 rounded-lg border bg-white flex items-start gap-3"
                   >
-                    <div className="pt-1">{impactChip(f.impact)}</div>
+                    <div className="pt-1">
+                      <span
+                        className={clsx(
+                          "px-2 py-0.5 rounded text-xs font-medium",
+                          f.impact === "high" && "bg-red-100 text-red-700",
+                          f.impact === "medium" &&
+                            "bg-amber-100 text-amber-700",
+                          f.impact === "low" &&
+                            "bg-emerald-100 text-emerald-700"
+                        )}
+                      >
+                        {(f.impact || "low").toUpperCase()}
+                      </span>
+                    </div>
                     <div>
                       <div className="font-medium">{f.title}</div>
                       <div className="text-sm text-slate-600 mt-1">
@@ -529,7 +434,7 @@ export default function FullReportView() {
             <div className="mt-1 text-sm">{Math.round(displayScore)} / 100</div>
             {loading && (
               <div className="mt-1 text-xs text-slate-500">
-                Computing best-practice score…
+                Streaming analysis…
               </div>
             )}
           </div>
@@ -554,11 +459,16 @@ export default function FullReportView() {
             </div>
           )}
 
-          {/* Quick wins */}
+          {/* Quick wins + overall lift */}
           {report?.quick_wins && report.quick_wins.length > 0 && (
             <div className="rounded-xl border bg-white p-3">
-              <div className="font-medium mb-2">Quick Wins</div>
-              <ul className="text-sm text-slate-700 list-disc pl-5">
+              <div className="flex items-center justify-between">
+                <div className="font-medium">Quick Wins</div>
+                <div className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                  ≈ +{quickWinsLiftPct}% leads (if all done)
+                </div>
+              </div>
+              <ul className="text-sm text-slate-700 list-disc pl-5 mt-2">
                 {report.quick_wins.map((q, i) => (
                   <li key={i}>{q}</li>
                 ))}
@@ -566,21 +476,21 @@ export default function FullReportView() {
             </div>
           )}
 
-          {/* Backlog with conversion lift */}
+          {/* Backlog with big conversion-lift badges */}
           {report?.prioritized_backlog &&
             report.prioritized_backlog.length > 0 && (
               <div className="rounded-xl border bg-white p-3">
                 <div className="font-medium mb-2">Prioritized Backlog</div>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {report.prioritized_backlog.map((b, i) => (
                     <div key={i} className="border rounded-lg p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium">{b.title}</div>
-                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 text-xs">
+                        <span className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
                           {impactToLift[b.impact] || "Potential lift"}
                         </span>
                       </div>
-                      <div className="mt-1 text-xs text-slate-600 flex flex-wrap items-center gap-2">
+                      <div className="mt-2 text-xs text-slate-600 flex flex-wrap items-center gap-2">
                         <span className="px-2 py-0.5 rounded bg-slate-100">
                           Impact {b.impact}
                         </span>
@@ -607,25 +517,4 @@ export default function FullReportView() {
       </div>
     </div>
   );
-}
-
-/* -------------------------------------------------------
-   Number animation helper (score)
-------------------------------------------------------- */
-function animateNumber(
-  setter: (n: number) => void,
-  from: number,
-  to: number,
-  durationMs = 900
-) {
-  const start = performance.now();
-  const delta = to - from;
-
-  function tick(now: number) {
-    const t = clamp((now - start) / durationMs, 0, 1);
-    const eased = easeOutCubic(t);
-    setter(from + delta * eased);
-    if (t < 1) requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
 }

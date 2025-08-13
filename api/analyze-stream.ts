@@ -1,0 +1,294 @@
+// api/analyze-stream.ts
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import OpenAI from "openai";
+
+/* ---------- small helpers ---------- */
+function normalizeUrl(input: string): string {
+  const s = String(input || "").trim();
+  if (!s) throw new Error("Missing URL");
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+}
+function extractTitle(html: string): string | undefined {
+  const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  return m?.[1]?.trim();
+}
+function extractText(html: string, maxChars = 20000) {
+  const noScript = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const text = noScript
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.slice(0, maxChars);
+}
+function detectSections(text: string) {
+  const t = text.toLowerCase();
+  const has = (kws: string[]) => kws.some((k) => t.includes(k));
+  return {
+    hero:
+      has(["get started", "try free", "start now", "learn more", "sign up"]) ||
+      t.split(" ").length > 30,
+    value_prop: has([
+      "benefit",
+      "why",
+      "you get",
+      "we help",
+      "our solution",
+      "features",
+    ]),
+    social_proof: has([
+      "testimonial",
+      "what our customers",
+      "as seen in",
+      "reviews",
+      "trusted by",
+    ]),
+    pricing: has(["pricing", "price", "plans"]),
+    features: has(["feature", "capabilities", "what you get"]),
+    faq: has(["faq", "frequently asked", "questions"]),
+    contact: has(["contact", "email us", "get in touch", "support"]),
+    footer: has(["privacy", "terms", "©"]),
+  };
+}
+function buildScreenshotUrl(url: string): string | null {
+  const tmpl = process.env.SCREENSHOT_URL_TMPL; // e.g. https://s.wordpress.com/mshots/v1/{URL}?w=1200
+  return tmpl ? tmpl.replace("{URL}", encodeURIComponent(url)) : null;
+}
+
+/* ---------- strict JSON schema for Responses API ---------- */
+const croSchema = {
+  type: "object",
+  properties: {
+    score: { type: "integer", minimum: 0, maximum: 100 },
+    summary: { type: "string" },
+    key_findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "string", enum: ["high", "medium", "low"] },
+          recommendation: { type: "string" },
+        },
+        required: ["title", "impact", "recommendation"],
+        additionalProperties: false,
+      },
+      maxItems: 8,
+    },
+    quick_wins: { type: "array", items: { type: "string" }, maxItems: 6 },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "string", enum: ["high", "medium", "low"] },
+          recommendation: { type: "string" },
+        },
+        required: ["title", "impact", "recommendation"],
+        additionalProperties: false,
+      },
+      maxItems: 20,
+    },
+    prioritized_backlog: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "integer", minimum: 1, maximum: 3 },
+          effort: { type: "integer", minimum: 1, maximum: 3 },
+          eta_days: { type: "integer" },
+          notes: { type: "string" },
+        },
+        required: ["title", "impact", "effort", "eta_days", "notes"],
+        additionalProperties: false,
+      },
+      maxItems: 12,
+    },
+    content_audit: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          section: { type: "string" },
+          status: { type: "string", enum: ["ok", "weak", "missing"] },
+          rationale: { type: "string" },
+          suggestions: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: 5,
+          },
+        },
+        required: ["section", "status", "rationale", "suggestions"],
+        additionalProperties: false,
+      },
+      maxItems: 12,
+    },
+  },
+  required: [
+    "score",
+    "summary",
+    "key_findings",
+    "quick_wins",
+    "findings",
+    "prioritized_backlog",
+    "content_audit",
+  ],
+  additionalProperties: false,
+} as const;
+
+/* ---------- SSE ---------- */
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Only GET with query params (?url=...&mode=full)
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    res.writeHead(405).end();
+    return;
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "OPENAI_API_KEY is not set" }));
+    return;
+  }
+
+  const urlParam = String(req.query.url || "");
+  const mode = String(req.query.mode || "full") as "free" | "full";
+
+  // SSE headers
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    // CORS not needed for same-origin; add if you plan cross-origin requests:
+    // "Access-Control-Allow-Origin": "*",
+  });
+
+  const send = (event: string, data: any) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const heartbeat = setInterval(() => res.write(`:\n\n`), 15000); // keep-alive
+
+  let progress = 0;
+  const tick = setInterval(() => {
+    progress = Math.min(95, progress + Math.random() * 6 + 2);
+    send("progress", { value: Math.floor(progress) });
+  }, 400);
+
+  try {
+    const url = normalizeUrl(urlParam);
+    send("progress", { value: (progress = Math.max(progress, 5)) });
+
+    // fetch page
+    const pageResp = await fetch(url, {
+      headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
+      redirect: "follow",
+    });
+    if (!pageResp.ok) {
+      throw new Error(
+        `Fetch failed: ${pageResp.status} ${pageResp.statusText}`
+      );
+    }
+    const html = await pageResp.text();
+    send("progress", { value: (progress = Math.max(progress, 15)) });
+
+    const title = extractTitle(html);
+    const text = extractText(html);
+    const sections = detectSections(text);
+    const screenshotUrl = buildScreenshotUrl(url);
+
+    // OpenAI
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const system =
+      "You are a CRO expert. Analyze landing page copy and structure. Return STRICT JSON matching the provided schema.";
+    const userContent =
+      mode === "free"
+        ? `Mode: FREE
+Return a lean but complete report (fill all required fields in the schema, but keep content concise).
+URL: ${url}
+TITLE: ${title || "(none)"}
+TEXT (truncated):
+${text}`
+        : `Mode: FULL
+Return a full report including content_audit (hero/value_prop/social_proof/pricing/features/faq/contact/footer) and prioritized_backlog. All required fields in the schema must be present.
+URL: ${url}
+TITLE: ${title || "(none)"}
+TEXT (truncated):
+${text}`;
+
+    send("progress", { value: (progress = Math.max(progress, 30)) });
+
+    const resp = await openai.responses.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: userContent },
+        {
+          role: "user",
+          content: "Return JSON only that matches the schema exactly.",
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "cro_full_report",
+          schema: croSchema,
+          strict: true,
+        },
+      },
+      max_output_tokens: 1400,
+    });
+
+    // @ts-ignore
+    const rawText =
+      resp.output_text ??
+      // @ts-ignore
+      resp.output?.[0]?.content?.[0]?.text ??
+      (typeof (resp as any).content === "string"
+        ? (resp as any).content
+        : null);
+
+    if (!rawText || typeof rawText !== "string") {
+      throw new Error("OpenAI returned no text content");
+    }
+
+    let data: any;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      const cleaned = String(rawText)
+        .replace(/^[\s`]*\{/, "{")
+        .replace(/\}[\s`]*$/, "}");
+      data = JSON.parse(cleaned);
+    }
+
+    send("progress", { value: (progress = Math.max(progress, 95)) });
+
+    // Merge non-LLM fields and finish
+    const result = {
+      ...data,
+      sections_detected: sections,
+      page: { url, title },
+      assets: {
+        screenshot_url: screenshotUrl,
+        suggested_screenshot_url: screenshotUrl,
+      },
+    };
+
+    send("result", result);
+    send("progress", { value: 100 });
+    res.end();
+  } catch (e: any) {
+    send("error", { message: e?.message || "stream failed" });
+    res.end();
+  } finally {
+    clearInterval(tick);
+    clearInterval(heartbeat);
+  }
+}
+
+export const config = { api: { bodyParser: false } };
