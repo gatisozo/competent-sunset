@@ -11,6 +11,152 @@ import type {
 const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || "";
 const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
+function BadgesRow() {
+  const Item = ({
+    title,
+    subtitle,
+    icon,
+  }: {
+    title: string;
+    subtitle: string;
+    icon: React.ReactNode;
+  }) => (
+    <div className="flex flex-col items-center text-center gap-3">
+      <div className="relative grid place-items-center h-24 w-24 rounded-full">
+        {/* divi plāni apļi */}
+        <div className="absolute inset-0 rounded-full border border-slate-200" />
+        <div className="absolute inset-2 rounded-full border border-slate-200" />
+        <div className="relative">{icon}</div>
+      </div>
+      <div className="text-base font-medium">{title}</div>
+      <div className="text-sm text-slate-600">{subtitle}</div>
+    </div>
+  );
+
+  const accent = "#E29578";
+
+  return (
+    <div className="rounded-2xl border bg-white p-5">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+        <Item
+          title="100+"
+          subtitle="Checkpoints"
+          icon={
+            <svg
+              aria-hidden
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+              className="opacity-90"
+            >
+              <circle cx="11" cy="11" r="7" stroke={accent} strokeWidth="2" />
+              <line
+                x1="16.65"
+                y1="16.65"
+                x2="21"
+                y2="21"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          }
+        />
+
+        <Item
+          title="Potential"
+          subtitle="+20% Lift"
+          icon={
+            <svg
+              aria-hidden
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path
+                d="M4 20V6"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <path
+                d="M8 20V10"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <path
+                d="M12 20V8"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <path
+                d="M16 20V5m0 0l3 3m-3-3l-3 3"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          }
+        />
+
+        <Item
+          title="Report"
+          subtitle="in 1–2 Minutes"
+          icon={
+            <svg
+              aria-hidden
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle cx="12" cy="12" r="9" stroke={accent} strokeWidth="2" />
+              <path
+                d="M12 7v6l4 2"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          }
+        />
+
+        <Item
+          title="Trusted by"
+          subtitle="10,000+ Audits"
+          icon={
+            <svg
+              aria-hidden
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path
+                d="M12 3l7 3v5c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-3z"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M9 12l2 2 4-4"
+                stroke={accent}
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          }
+        />
+      </div>
+    </div>
+  );
+}
 
 export default function Landing() {
   // URL + run test
@@ -496,9 +642,8 @@ export default function Landing() {
             </p>
           </div>
 
-          {/* RIGHT column with images */}
+          {/* RIGHT column with report preview + badges row */}
           <div className="grid gap-4">
-            {/* Report preview image */}
             <div className="rounded-2xl border bg-slate-50 overflow-hidden">
               <img
                 src="/report-1.png"
@@ -506,14 +651,7 @@ export default function Landing() {
                 className="w-full h-auto block"
               />
             </div>
-            {/* Badges image */}
-            <div className="rounded-2xl border bg-slate-50 overflow-hidden">
-              <img
-                src="/badges.png"
-                alt="Metrics / badges"
-                className="w-full h-auto block"
-              />
-            </div>
+            <BadgesRow />
           </div>
         </div>
       </section>
