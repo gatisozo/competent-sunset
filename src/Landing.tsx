@@ -11,6 +11,7 @@ import type {
 const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || "";
 const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
+
 function BadgesRow() {
   const Item = ({
     title,
@@ -23,7 +24,6 @@ function BadgesRow() {
   }) => (
     <div className="flex flex-col items-center text-center gap-3">
       <div className="relative grid place-items-center h-24 w-24 rounded-full">
-        {/* divi plāni apļi */}
         <div className="absolute inset-0 rounded-full border border-slate-200" />
         <div className="absolute inset-2 rounded-full border border-slate-200" />
         <div className="relative">{icon}</div>
@@ -63,7 +63,6 @@ function BadgesRow() {
             </svg>
           }
         />
-
         <Item
           title="Potential"
           subtitle="+20% Lift"
@@ -102,7 +101,6 @@ function BadgesRow() {
             </svg>
           }
         />
-
         <Item
           title="Report"
           subtitle="in 1–2 Minutes"
@@ -125,7 +123,6 @@ function BadgesRow() {
             </svg>
           }
         />
-
         <Item
           title="Trusted by"
           subtitle="10,000+ Audits"
@@ -205,7 +202,6 @@ export default function Landing() {
         100
       );
 
-      // fetch AI (FREE mode)
       try {
         const freeReport = await analyzeUrl(url, "free");
         setReport(freeReport);
@@ -386,7 +382,7 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* HERO (bez preview kastes labajā pusē) */}
+      {/* HERO — atjaunots ar attēlu labajā pusē */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] to-[#83C5BE]" />
         <div className="relative mx-auto max-w-6xl px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
@@ -423,21 +419,32 @@ export default function Landing() {
 
             <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-4 text-white/90 text-sm">
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-white/80" />
-                No sign-up needed
+                <span className="h-2 w-2 rounded-full bg-white/80" /> No sign-up
+                needed
               </div>
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-white/80" />
-                No credit card required
+                <span className="h-2 w-2 rounded-full bg-white/80" /> No credit
+                card required
               </div>
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-white/80" />
-                Results in 1–2 min
+                <span className="h-2 w-2 rounded-full bg-white/80" /> Results in
+                1–2 min
               </div>
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-white/80" />
-                AI analysis
+                <span className="h-2 w-2 rounded-full bg-white/80" /> AI
+                analysis
               </div>
+            </div>
+          </div>
+
+          {/* HERO IMAGE PANEL */}
+          <div className="hidden md:block">
+            <div className="rounded-2xl border bg-white/90 p-3 shadow-xl">
+              <img
+                src="/hero.png"
+                alt="Holbox AI hero illustration"
+                className="w-full h-auto rounded-xl"
+              />
             </div>
           </div>
         </div>
@@ -555,7 +562,7 @@ export default function Landing() {
         )}
       </section>
 
-      {/* SCORECARD (email gate) */}
+      {/* SCORECARD */}
       <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
           <div>
@@ -600,7 +607,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PRICING (ar report preview + badges labajā kolonnā) */}
+      {/* PRICING */}
       <section
         id="pricing"
         className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16"
@@ -682,41 +689,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* COMPARISON */}
-      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
-        <h3 className="text-2xl font-semibold mb-6">Compare Plans</h3>
-        <div className="overflow-x-auto rounded-2xl border">
-          <table className="min-w-full text-sm bg-white">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="text-left p-4">Feature</th>
-                <th className="text-left p-4">Free Test</th>
-                <th className="text-left p-4">Full Audit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["AI Analysis", "✓", "✓"],
-                ["Top 3–5 recommendations", "✓", "✓"],
-                ["Full annotated screenshots", "✗", "✓"],
-                ["40+ checkpoints", "✗", "✓"],
-                ["Prioritized task list", "✗", "✓"],
-                ["PDF & online report", "✓ (limited)", "✓ (full)"],
-                ["Delivery time", "1–2 min", "1–2 min"],
-                ["Price", "Free", "$50"],
-              ].map((row, i) => (
-                <tr key={i} className="border-t">
-                  <td className="p-4 font-medium">{row[0]}</td>
-                  <td className="p-4">{row[1]}</td>
-                  <td className="p-4">{row[2]}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* CASE STUDY */}
+      {/* CASE STUDY — ar attēlu labajā pusē */}
       <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 md:gap-8 items-center">
           <div className="md:col-span-2">
@@ -735,8 +708,12 @@ export default function Landing() {
               getting a great return.”
             </blockquote>
           </div>
-          <div className="h-28 md:h-32 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
-            Before/After chart
+          <div className="rounded-2xl border bg-slate-50 overflow-hidden">
+            <img
+              src="/before-after.png"
+              alt="Before and after results"
+              className="w-full h-auto block"
+            />
           </div>
         </div>
       </section>
