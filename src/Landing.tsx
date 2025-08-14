@@ -303,7 +303,7 @@ export default function Landing() {
     window.location.href = "/full?sample=1";
   };
 
-  // derived
+  // derived for free preview
   const score =
     report && typeof (report as any).score === "number"
       ? ((report as any).score as number)
@@ -458,23 +458,14 @@ export default function Landing() {
 
         {/* local keyframes */}
         <style>{`
-          @keyframes float {
-            0% { transform: translateY(0px); }
-            50% { transform: translateY(-6px); }
-            100% { transform: translateY(0px); }
-          }
+          @keyframes float { 0% { transform: translateY(0px); } 50% { transform: translateY(-6px); } 100% { transform: translateY(0px); } }
           .animate-float { animation: float 9s ease-in-out infinite; }
-          @keyframes glide {
-            0% { transform: translateX(-40%) rotate(12deg); opacity: .0; }
-            30% { opacity: .35; }
-            60% { opacity: .2; }
-            100% { transform: translateX(140%) rotate(12deg); opacity: .0; }
-          }
+          @keyframes glide { 0% { transform: translateX(-40%) rotate(12deg); opacity: .0; } 30% { opacity: .35; } 60% { opacity: .2; } 100% { transform: translateX(140%) rotate(12deg); opacity: .0; } }
           .animate-glide { animation: glide 7.5s ease-in-out infinite; }
         `}</style>
       </section>
 
-      {/* PREVIEW */}
+      {/* PREVIEW — **Free report** sadaļa atjaunota */}
       <section
         id="preview"
         ref={previewRef}
@@ -486,8 +477,12 @@ export default function Landing() {
           </div>
         ) : (
           <div className="space-y-8">
-            {(score !== null || sections) && (
+            {score !== null ||
+            sections ||
+            heroSuggestions.length ||
+            nextSuggestions.length ? (
               <div className="grid lg:grid-cols-3 gap-6 md:gap-8">
+                {/* Summary (Grade) */}
                 <div className="lg:col-span-1">
                   <h2 className="text-2xl md:text-3xl font-semibold">
                     Your Website Summary
@@ -496,22 +491,20 @@ export default function Landing() {
                     AI-generated grade and top blockers.
                   </p>
 
-                  {score !== null && (
-                    <div className="mt-5 p-5 rounded-2xl border bg-white">
-                      <div className="text-sm text-slate-500">
-                        Your Website’s Grade
-                      </div>
-                      <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                        <div
-                          className="h-full bg-[#006D77]"
-                          style={{ width: `${score}%` }}
-                        />
-                      </div>
-                      <div className="mt-2 text-sm font-medium">
-                        {score} / 100
-                      </div>
+                  <div className="mt-5 p-5 rounded-2xl border bg-white">
+                    <div className="text-sm text-slate-500">
+                      Your Website’s Grade
                     </div>
-                  )}
+                    <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
+                      <div
+                        className="h-full bg-[#006D77]"
+                        style={{ width: `${score ?? animatedScore}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 text-sm font-medium">
+                      {score ?? animatedScore} / 100
+                    </div>
+                  </div>
 
                   {aiError && (
                     <p className="mt-3 text-sm text-red-600">
@@ -521,6 +514,7 @@ export default function Landing() {
                   )}
                 </div>
 
+                {/* Details: sections + suggestions */}
                 <div className="lg:col-span-2 grid gap-4">
                   {sections && (
                     <div className="p-5 rounded-2xl border bg-white">
@@ -580,6 +574,11 @@ export default function Landing() {
                     </div>
                   )}
                 </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
+                We couldn’t parse enough content from that URL. Try another
+                page.
               </div>
             )}
           </div>
