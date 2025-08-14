@@ -1,5 +1,5 @@
 // src/Landing.tsx
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import { analyzeUrl } from "./lib/analyze";
 import type {
   CroReport,
@@ -11,8 +11,85 @@ import type {
 const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || "";
 const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
+const SCREENSHOT_URL_TMPL =
+  import.meta.env.VITE_SCREENSHOT_URL_TMPL ||
+  // WordPress mShots kā drošs rezerves variants
+  "https://s.wordpress.com/mshots/v1/{URL}?w=1200";
 
-/* ---------------- Badges row ---------------- */
+/* ---------------- helpers ---------------- */
+function impactRank(i?: "high" | "medium" | "low") {
+  if (i === "high") return 3;
+  if (i === "medium") return 2;
+  return 1;
+}
+function makeBackupShot(u: string) {
+  try {
+    const url = new URL(u);
+    const abs = `${url.protocol}//${url.host}${url.pathname}`;
+    return SCREENSHOT_URL_TMPL.replace("{URL}", encodeURIComponent(abs));
+  } catch {
+    // ja ievadīts tikai domēns
+    const normalized = u.startsWith("http") ? u : `https://${u}`;
+    return SCREENSHOT_URL_TMPL.replace("{URL}", encodeURIComponent(normalized));
+  }
+}
+function isHeroFinding(title: string) {
+  const t = (title || "").toLowerCase();
+  return (
+    t.includes("hero") ||
+    t.includes("above the fold") ||
+    t.includes("headline") ||
+    t.includes("cta") ||
+    t.includes("primary button")
+  );
+}
+
+/** vienkāršs “gudrais” screenshot ielādētājs ar spinner + retry + cache-buster */
+function useSmartScreenshot(primary?: string | null, fallbackFromUrl?: string) {
+  const [src, setSrc] = useState<string | null>(primary || null);
+  const [loading, setLoading] = useState<boolean>(!!primary);
+  const [attempts, setAttempts] = useState(0);
+  const MAX_ATTEMPTS = 5;
+
+  useEffect(() => {
+    setSrc(
+      primary || (fallbackFromUrl ? makeBackupShot(fallbackFromUrl) : null)
+    );
+    setLoading(!!(primary || fallbackFromUrl));
+    setAttempts(0);
+  }, [primary, fallbackFromUrl]);
+
+  const withCb = (u: string) =>
+    u + (u.includes("?") ? "&" : "?") + "cb=" + Date.now();
+
+  const onLoad: React.ReactEventHandler<HTMLImageElement> = (e) => {
+    const img = e.currentTarget;
+    // ja atnācis pārāk mazs, pamēģinam vēl
+    if (
+      (img.naturalWidth < 400 || img.naturalHeight < 250) &&
+      attempts < MAX_ATTEMPTS &&
+      src
+    ) {
+      setAttempts((a) => a + 1);
+      setTimeout(() => setSrc(withCb(src)), 1200);
+    } else {
+      setLoading(false);
+    }
+  };
+
+  const onError = () => {
+    if (attempts < MAX_ATTEMPTS && src) {
+      setAttempts((a) => a + 1);
+      setSrc(withCb(src));
+    } else {
+      setLoading(false);
+    }
+  };
+
+  return { src, loading, onLoad, onError };
+}
+
+/* ---------------- Badges row (nemainīts) ---------------- */
 function BadgesRow() {
   const Item = ({
     title,
@@ -161,7 +238,8 @@ export default function Landing() {
   // URL + run test
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState(0); // 0..100
+  const [eta, setEta] = useState(15); // sekundes līdz gatavs (demo)
   const [showResults, setShowResults] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
@@ -188,6 +266,7 @@ export default function Landing() {
     // reset
     setShowResults(false);
     setProgress(0);
+    setEta(15);
     setLoading(true);
     setReport(null);
     setAiError("");
@@ -195,6 +274,13 @@ export default function Landing() {
 
     const durationMs = 15000; // demo countdown
     const start = Date.now();
+
+    // ETA sekundes
+    const etaTimer = setInterval(() => {
+      const left = Math.max(0, 15 - Math.floor((Date.now() - start) / 1000));
+      setEta(left);
+      if (left <= 0) clearInterval(etaTimer);
+    }, 250);
 
     const onDone = async () => {
       setLoading(false);
@@ -240,7 +326,6 @@ export default function Landing() {
       if (p < 100) requestAnimationFrame(tick);
       else onDone();
     };
-
     requestAnimationFrame(tick);
   };
 
@@ -309,10 +394,29 @@ export default function Landing() {
       ? ((report as any).score as number)
       : null;
   const sections: SectionPresence | undefined = report?.sections_detected;
+
+  // Izvilksim ieteikumus, izvēloties TOP-3 ar augstāko impact
   const heroSuggestions: Suggestion[] =
     (report as FreeReport)?.hero?.suggestions || [];
   const nextSuggestions: Suggestion[] =
     (report as FreeReport)?.next_section?.suggestions || [];
+  const top3Suggestions = useMemo(() => {
+    const all = [...heroSuggestions, ...nextSuggestions];
+    return all
+      .slice()
+      .sort((a, b) => impactRank(b.impact) - impactRank(a.impact))
+      .slice(0, 3);
+  }, [heroSuggestions, nextSuggestions]);
+
+  // Hero screenshot (ja atdod API), citādi – rezerves mShots
+  const pageUrl = (report as any)?.page?.url || url || "";
+  const apiShot = (report as any)?.assets?.screenshot_url as string | undefined;
+  const {
+    src: heroShot,
+    loading: shotLoading,
+    onLoad,
+    onError,
+  } = useSmartScreenshot(apiShot || null, pageUrl);
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -465,7 +569,7 @@ export default function Landing() {
         `}</style>
       </section>
 
-      {/* PREVIEW — **Free report** sadaļa atjaunota */}
+      {/* PREVIEW — **Free report** */}
       <section
         id="preview"
         ref={previewRef}
@@ -476,11 +580,25 @@ export default function Landing() {
             Run a test to see your live preview here.
           </div>
         ) : (
-          <div className="space-y-8">
+          <>
+            {/* Animēts statusbar + ETA */}
+            {loading && (
+              <div className="mb-4">
+                <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className="h-full bg-[#006D77] transition-[width] duration-200"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  Generating… ~{eta}s left
+                </div>
+              </div>
+            )}
+
             {score !== null ||
             sections ||
-            heroSuggestions.length ||
-            nextSuggestions.length ? (
+            (heroShot && top3Suggestions.length) ? (
               <div className="grid lg:grid-cols-3 gap-6 md:gap-8">
                 {/* Summary (Grade) */}
                 <div className="lg:col-span-1">
@@ -514,8 +632,50 @@ export default function Landing() {
                   )}
                 </div>
 
-                {/* Details: sections + suggestions */}
+                {/* Hero preview ar overlay (TOP-3 worst findings) */}
                 <div className="lg:col-span-2 grid gap-4">
+                  {heroShot && top3Suggestions.length > 0 ? (
+                    <div className="p-3 rounded-2xl border bg-white">
+                      <div className="font-medium mb-1">Hero — Top Issues</div>
+                      <div className="relative rounded-xl overflow-hidden border bg-white h-[420px]">
+                        {/* Spinner */}
+                        {shotLoading && (
+                          <div className="absolute inset-0 grid place-items-center bg-white/60 z-10">
+                            <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
+                          </div>
+                        )}
+                        {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                        <img
+                          src={heroShot || undefined}
+                          onLoad={onLoad}
+                          onError={onError}
+                          className={
+                            shotLoading
+                              ? "opacity-0 transition-opacity duration-300 w-full h-full object-cover"
+                              : "opacity-100 transition-opacity duration-300 w-full h-full object-cover"
+                          }
+                          style={{ objectPosition: "top" }}
+                        />
+
+                        {/* Overlay ar 3 sliktākajiem */}
+                        <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                          <div className="font-medium mb-1">
+                            Top suggestions
+                          </div>
+                          <ul className="space-y-1">
+                            {top3Suggestions.map((s, i) => (
+                              <li key={i}>
+                                • [{s.impact}] <b>{s.title}</b> —{" "}
+                                {s.recommendation}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Sections present */}
                   {sections && (
                     <div className="p-5 rounded-2xl border bg-white">
                       <div className="font-medium mb-2">Sections Present</div>
@@ -537,42 +697,6 @@ export default function Landing() {
                       </div>
                     </div>
                   )}
-
-                  {(heroSuggestions.length > 0 ||
-                    nextSuggestions.length > 0) && (
-                    <div className="grid sm:grid-cols-2 gap-4">
-                      {heroSuggestions.length > 0 && (
-                        <div className="p-5 rounded-2xl border bg-white">
-                          <div className="font-medium mb-1">
-                            Hero — Suggestions
-                          </div>
-                          <ul className="text-sm text-slate-700 space-y-1">
-                            {heroSuggestions.map((s, i) => (
-                              <li key={i}>
-                                • [{s.impact}] <b>{s.title}</b> —{" "}
-                                {s.recommendation}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {nextSuggestions.length > 0 && (
-                        <div className="p-5 rounded-2xl border bg-white">
-                          <div className="font-medium mb-1">
-                            Next Section — Suggestions
-                          </div>
-                          <ul className="text-sm text-slate-700 space-y-1">
-                            {nextSuggestions.map((s, i) => (
-                              <li key={i}>
-                                • [{s.impact}] <b>{s.title}</b> —{" "}
-                                {s.recommendation}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
             ) : (
@@ -581,7 +705,7 @@ export default function Landing() {
                 page.
               </div>
             )}
-          </div>
+          </>
         )}
       </section>
 
@@ -672,7 +796,7 @@ export default function Landing() {
             </p>
           </div>
 
-          {/* RIGHT column with report preview + badges row */}
+          {/* RIGHT column ar preview + badges */}
           <div className="grid gap-4">
             <div className="rounded-2xl border bg-slate-50 overflow-hidden">
               <img
