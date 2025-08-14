@@ -12,6 +12,7 @@ const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || "";
 const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
 
+/* ---------------- Badges row ---------------- */
 function BadgesRow() {
   const Item = ({
     title,
@@ -155,6 +156,7 @@ function BadgesRow() {
   );
 }
 
+/* ---------------- Page ---------------- */
 export default function Landing() {
   // URL + run test
   const [url, setUrl] = useState("");
@@ -317,7 +319,7 @@ export default function Landing() {
       {/* Test banner */}
       {(!PAYMENT_LINK_URL || !EMAIL_ENDPOINT_URL) && (
         <div className="bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-sm">
-          <div className="mx-auto max-w-6xl px-4 py-2">
+          <div className="mx-auto max-w-[2030px] px-4 py-2">
             Running in <b>Dev/Test Mode</b>. “Order Full Audit” opens the full
             report directly.
           </div>
@@ -353,7 +355,7 @@ export default function Landing() {
 
       {/* NAV */}
       <header className="hidden md:block sticky top-0 z-20 backdrop-blur bg-white/70 border-b">
-        <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
+        <div className="mx-auto max-w-[2030px] px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-[#006D77]" />
             <span className="font-semibold tracking-tight">Holbox AI</span>
@@ -375,17 +377,17 @@ export default function Landing() {
           <button
             onClick={runTest}
             disabled={loading || !url.trim()}
-            className="rounded-xl px-4 py-2 text-white bg-[#006D77] hover:opacity-90 disabled:opacity-60"
+            className="rounded-xl px-4 py-2 text-white bg-[#E76F51] hover:bg-[#d86147] disabled:opacity-60"
           >
             {loading ? "Running…" : "Run Free Test"}
           </button>
         </div>
       </header>
 
-      {/* HERO — atjaunots ar attēlu labajā pusē */}
+      {/* HERO — ar attēlu labajā pusē un uzlabotu stilu */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] to-[#83C5BE]" />
-        <div className="relative mx-auto max-w-6xl px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
+        <div className="relative mx-auto max-w-[2030px] px-4 py-12 md:py-16 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
           <div className="text-white">
             <h1 className="text-3xl md:text-5xl font-bold leading-tight">
               Get a Second Opinion on Your Website.
@@ -410,7 +412,7 @@ export default function Landing() {
                 <button
                   type="submit"
                   disabled={loading || !url.trim()}
-                  className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
+                  className="rounded-xl px-5 py-3 bg-[#E76F51] hover:bg-[#d86147] text-white font-medium disabled:opacity-60"
                 >
                   {loading ? "Running…" : "Run Free Test"}
                 </button>
@@ -439,22 +441,44 @@ export default function Landing() {
 
           {/* HERO IMAGE PANEL */}
           <div className="hidden md:block">
-            <div className="rounded-2xl border bg-white/90 p-3 shadow-xl">
+            <div className="relative rounded-2xl border bg-white/90 p-3 shadow-xl overflow-hidden">
+              {/* Glare stripe */}
+              <div className="pointer-events-none absolute -left-1/3 top-0 h-full w-1/2 rotate-12 bg-white/20 blur-2xl animate-glide" />
+              {/* Image */}
               <img
                 src="/hero.png"
                 alt="Holbox AI hero illustration"
-                className="w-full h-auto rounded-xl"
+                className="w-full h-auto rounded-xl animate-float"
               />
+              {/* Soft gradient at bottom to blend */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-white to-transparent" />
             </div>
           </div>
         </div>
+
+        {/* local keyframes */}
+        <style>{`
+          @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-6px); }
+            100% { transform: translateY(0px); }
+          }
+          .animate-float { animation: float 9s ease-in-out infinite; }
+          @keyframes glide {
+            0% { transform: translateX(-40%) rotate(12deg); opacity: .0; }
+            30% { opacity: .35; }
+            60% { opacity: .2; }
+            100% { transform: translateX(140%) rotate(12deg); opacity: .0; }
+          }
+          .animate-glide { animation: glide 7.5s ease-in-out infinite; }
+        `}</style>
       </section>
 
       {/* PREVIEW */}
       <section
         id="preview"
         ref={previewRef}
-        className="mx-auto max-w-6xl px-3 md:px-4 py-10 md:py-16"
+        className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-12"
       >
         {!showResults ? (
           <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
@@ -563,8 +587,8 @@ export default function Landing() {
       </section>
 
       {/* SCORECARD */}
-      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
+      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12">
+        <div className="rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
           <div>
             <h3 className="text-xl md:text-2xl font-semibold">
               Get a Free Scorecard for Your Website.
@@ -610,9 +634,9 @@ export default function Landing() {
       {/* PRICING */}
       <section
         id="pricing"
-        className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16"
+        className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12"
       >
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 md:gap-8 items-start">
+        <div className="rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-2 gap-6 md:gap-8 items-start">
           <div>
             <h3 className="text-2xl md:text-3xl font-semibold">
               Full AI Report in 1–2 Minutes — Just $50
@@ -632,7 +656,7 @@ export default function Landing() {
             <div className="mt-6 flex gap-3">
               <button
                 onClick={handleOrderFullAudit}
-                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+                className="rounded-xl px-5 py-3 bg-[#E76F51] hover:bg-[#d86147] text-white font-medium"
               >
                 Order Full Audit
               </button>
@@ -664,7 +688,7 @@ export default function Landing() {
       </section>
 
       {/* BENEFITS */}
-      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
+      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12">
         <div className="grid md:grid-cols-2 gap-6 md:gap-8">
           <div className="rounded-3xl border bg-white p-5 md:p-6">
             <h4 className="text-lg md:text-xl font-semibold">
@@ -689,9 +713,9 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* CASE STUDY — ar attēlu labajā pusē */}
-      <section className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16">
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 md:gap-8 items-center">
+      {/* CASE STUDY */}
+      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12">
+        <div className="rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-3 gap-6 md:gap-8 items-center">
           <div className="md:col-span-2">
             <h3 className="text-2xl md:text-3xl font-semibold">
               How Holbox AI Gave This Business Owner Confidence in Their
@@ -721,7 +745,7 @@ export default function Landing() {
       {/* FAQ */}
       <section
         id="faq"
-        className="mx-auto max-w-6xl px-3 md:px-4 py-12 md:py-16"
+        className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12"
       >
         <h3 className="text-2xl font-semibold">FAQ</h3>
         <div className="mt-6 grid md:grid-cols-2 gap-6">
@@ -757,7 +781,7 @@ export default function Landing() {
 
       {/* FOOTER */}
       <footer className="border-t">
-        <div className="mx-auto max-w-6xl px-3 md:px-4 py-8 md:py-10 flex flex-col md:flex-row items-center justify-between gap-3 md:gap-4 text-sm text-slate-600">
+        <div className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-10 flex flex-col md:flex-row items-center justify-between gap-3 md:gap-4 text-sm text-slate-600">
           <div className="flex items-center gap-2">
             <div className="h-6 w-6 rounded-md bg-[#006D77]" />
             <span>Holbox AI</span>

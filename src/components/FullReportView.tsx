@@ -229,7 +229,6 @@ export default function FullReportView() {
   const screenshotUrl = report?.assets?.screenshot_url || null;
   const screenshotBackup =
     (report as any)?.assets?.screenshot_url_backup || null;
-  const suggestedShot = report?.assets?.suggested_screenshot_url || null;
 
   const shot = useSmartScreenshot(screenshotUrl, screenshotBackup);
 
@@ -245,7 +244,7 @@ export default function FullReportView() {
   }, [report?.quick_wins]);
 
   return (
-    <div className="mx-auto max-w-6xl px-3 md:px-4 py-8">
+    <div className="mx-auto max-w-[2030px] px-3 md:px-4 py-8">
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-2xl md:text-3xl font-semibold">Full Report</h1>
 
@@ -278,7 +277,7 @@ export default function FullReportView() {
           <button
             disabled={loading || !url.trim()}
             onClick={runAnalyze}
-            className="rounded-lg px-4 py-2 bg-[#006D77] text-white disabled:opacity-60"
+            className="rounded-lg px-4 py-2 bg-[#E76F51] hover:bg-[#d86147] text-white disabled:opacity-60"
           >
             {loading ? "Analyzing…" : "Analyze"}
           </button>
@@ -335,7 +334,6 @@ export default function FullReportView() {
                     <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
                   </div>
                 )}
-
                 {/* eslint-disable-next-line jsx-a11y/alt-text */}
                 <img
                   src={shot.src || undefined}
@@ -349,7 +347,6 @@ export default function FullReportView() {
                   }
                 />
 
-                {/* Overlay: top hero suggestions */}
                 {topHeroSuggestions.length > 0 && (
                   <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
                     <div className="font-medium mb-1">Top hero suggestions</div>
@@ -453,7 +450,7 @@ export default function FullReportView() {
         <div className="space-y-4">
           {/* Score (animated) */}
           <div className="rounded-xl border bg-white p-3">
-            <div className="text-sm text-slate-600">Score</div>
+            <div className="text-sm text-slate-600">Your Website’s Grade</div>
             <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
               <div
                 className="h-full bg-[#006D77]"
@@ -515,7 +512,7 @@ export default function FullReportView() {
                     <div key={i} className="border rounded-lg p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium">{b.title}</div>
-                        <span className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                        <span className="px-3 py-1 rounded-full text-sm font-semibold bg-emerald-100 text-emerald-800">
                           {impactToLift[b.impact] || "Potential lift"}
                         </span>
                       </div>
