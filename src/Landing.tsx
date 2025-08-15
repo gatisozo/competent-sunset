@@ -7,7 +7,7 @@ import type {
   Suggestion,
   Impact,
 } from "./lib/analyze";
-
+import SmartShot from "./components/SmartShot";
 /* ========= ENV ========= */
 const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || "";
 const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
@@ -491,16 +491,11 @@ export default function Landing() {
                     </div>
                   )}
                   {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                  <img
-                    src={heroShot || backupShot(pageUrl) || undefined}
-                    onLoad={onLoad}
-                    onError={onError}
-                    className={
-                      shotLoading
-                        ? "opacity-0 transition-opacity duration-300 w-full h-full object-cover"
-                        : "opacity-100 transition-opacity duration-300 w-full h-full object-cover"
-                    }
-                    style={{ objectPosition: "top" }}
+                  <SmartShot
+                    url={url /* vai report?.page?.url */}
+                    className="h-auto"
+                    alt="Hero snapshot"
+                    width={1200}
                   />
                   {topWorst.length > 0 && (
                     <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
