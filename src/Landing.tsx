@@ -5,9 +5,10 @@ import type {
   FreeReport,
   SectionPresence,
   Suggestion,
+  Impact,
 } from "./lib/analyze";
 
-// ENV
+/* ========= ENV ========= */
 const PAYMENT_LINK_URL = import.meta.env.VITE_PAYMENT_LINK_URL || "";
 const EMAIL_ENDPOINT_URL = import.meta.env.VITE_EMAIL_ENDPOINT_URL || "";
 const SALES_EMAIL = import.meta.env.VITE_SALES_EMAIL || "sales@holbox.ai";
@@ -15,21 +16,21 @@ const SCREENSHOT_URL_TMPL =
   import.meta.env.VITE_SCREENSHOT_URL_TMPL ||
   "https://s.wordpress.com/mshots/v1/{URL}?w=1200";
 
-// ---------- helpers ----------
+// Counteru sākumvērtības (override ar env, ja vēlies)
+const METRIC_REPORTS = Number(import.meta.env.VITE_METRIC_REPORTS ?? 12843);
+const METRIC_FULLS = Number(import.meta.env.VITE_METRIC_FULLS ?? 2122);
+const METRIC_DOMAINS = Number(import.meta.env.VITE_METRIC_DOMAINS ?? 10057);
+
+/* ========= HELPERS ========= */
 type Phase = "idle" | "loading" | "ready" | "error";
 
-const impactRank = (i?: "high" | "medium" | "low") =>
-  i === "high" ? 3 : i === "medium" ? 2 : 1;
-
-const isHeroFinding = (t: string) => {
-  const s = t.toLowerCase();
-  return (
-    s.includes("hero") ||
-    s.includes("above the fold") ||
-    s.includes("headline") ||
-    s.includes("cta")
-  );
+const impactWeight: Record<Impact, number> = {
+  high: 8,
+  medium: 5,
+  low: 2,
 };
+
+const impactRank = (i?: Impact) => (i === "high" ? 3 : i === "medium" ? 2 : 1);
 
 function normalizeAbs(urlLike: string) {
   try {
@@ -44,17 +45,13 @@ function backupShot(u: string) {
   return SCREENSHOT_URL_TMPL.replace("{URL}", encodeURIComponent(abs));
 }
 
-/** pagaidu score, ja free atskaitē nav skaitļa */
+/** Pagaidu score, ja free atskaitē nav skaitļa */
 function provisionalScore(r: FreeReport): number {
-  // vienkāršs heuristisks modelītis:
   const list: Suggestion[] = [
-    ...(r.hero?.suggestions || []),
-    ...(r.next_section?.suggestions || []),
-    // ...(r.findings || []),
+    ...(r.hero?.suggestions ?? []),
+    ...(r.next_section?.suggestions ?? []),
   ];
-  if (!list.length) return 60;
-
-  // sākam no 84 un atņemam par katru high/med/low ieteikumu
+  if (list.length === 0) return 60;
   let score = 84;
   for (const s of list) {
     if (s.impact === "high") score -= 4;
@@ -64,7 +61,7 @@ function provisionalScore(r: FreeReport): number {
   return Math.max(20, Math.min(98, Math.round(score)));
 }
 
-/** gudrs screenshot loaderis ar spinner + atkārtojumiem */
+/** Smart screenshot loaderis ar spinner + retry + cache-buster */
 function useSmartScreenshot(primary?: string | null, pageUrl?: string) {
   const initial = primary || (pageUrl ? backupShot(pageUrl) : null);
   const [src, setSrc] = useState<string | null>(initial);
@@ -84,14 +81,13 @@ function useSmartScreenshot(primary?: string | null, pageUrl?: string) {
 
   const onLoad: React.ReactEventHandler<HTMLImageElement> = (e) => {
     const img = e.currentTarget;
-    // ja pavisam mazs — vēlreiz
     if (
       (img.naturalWidth < 420 || img.naturalHeight < 260) &&
       tries < MAX &&
       src
     ) {
       setTries((t) => t + 1);
-      setTimeout(() => setSrc(withCb(src)), 900);
+      setTimeout(() => setSrc(withCb(src)), 800);
     } else {
       setLoading(false);
     }
@@ -107,124 +103,27 @@ function useSmartScreenshot(primary?: string | null, pageUrl?: string) {
   return { src, loading, onLoad, onError };
 }
 
-// ---------- badges ----------
-function BadgesRow() {
-  const Item = ({
-    title,
-    subtitle,
-    icon,
-  }: {
-    title: string;
-    subtitle: string;
-    icon: React.ReactNode;
-  }) => (
-    <div className="flex flex-col items-center text-center gap-3">
-      <div className="relative grid place-items-center h-24 w-24 rounded-full">
-        <div className="absolute inset-0 rounded-full border border-slate-200" />
-        <div className="absolute inset-2 rounded-full border border-slate-200" />
-        <div className="relative">{icon}</div>
-      </div>
-      <div className="text-base font-medium">{title}</div>
-      <div className="text-sm text-slate-600">{subtitle}</div>
-    </div>
-  );
-  const accent = "#E29578";
-  return (
-    <div className="rounded-2xl border bg-white p-5">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <Item
-          title="100+"
-          subtitle="Checkpoints"
-          icon={
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-              <circle cx="11" cy="11" r="7" stroke={accent} strokeWidth="2" />
-              <line
-                x1="16.65"
-                y1="16.65"
-                x2="21"
-                y2="21"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          }
-        />
-        <Item
-          title="Potential"
-          subtitle="+20% Lift"
-          icon={
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M4 20V6"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-              <path
-                d="M8 20V10"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-              <path
-                d="M12 20V8"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-              <path
-                d="M16 20V5m0 0l3 3m-3-3l-3 3"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          }
-        />
-        <Item
-          title="Report"
-          subtitle="in 1–2 Minutes"
-          icon={
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke={accent} strokeWidth="2" />
-              <path
-                d="M12 7v6l4 2"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          }
-        />
-        <Item
-          title="Trusted by"
-          subtitle="10,000+ Audits"
-          icon={
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M12 3l7 3v5c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-3z"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M9 12l2 2 4-4"
-                stroke={accent}
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          }
-        />
-      </div>
-    </div>
-  );
+function worstFindings(free: FreeReport, max = 5): Suggestion[] {
+  const all: Suggestion[] = [
+    ...(free.hero?.suggestions ?? []),
+    ...(free.next_section?.suggestions ?? []),
+  ];
+  return all
+    .slice()
+    .sort((a, b) => impactRank(b.impact) - impactRank(a.impact))
+    .slice(0, Math.max(3, Math.min(max, all.length || 3)));
 }
 
-// ---------- page ----------
+function sumLiftPercent(items: Suggestion[]): number {
+  const total = items.reduce(
+    (acc, s) => acc + impactWeight[s.impact ?? "low"],
+    0
+  );
+  // capped pie 40% free testam
+  return Math.min(40, total);
+}
+
+/* ========= MAIN ========= */
 export default function Landing() {
   // form / flow
   const [url, setUrl] = useState("");
@@ -240,6 +139,11 @@ export default function Landing() {
   const [emailError, setEmailError] = useState("");
   const [emailSubmitted, setEmailSubmitted] = useState(false);
 
+  // counters (animated)
+  const [cReports, setCReports] = useState(METRIC_REPORTS);
+  const [cFulls, setCFulls] = useState(METRIC_FULLS);
+  const [cDomains, setCDomains] = useState(METRIC_DOMAINS);
+
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   // derived
@@ -252,14 +156,8 @@ export default function Landing() {
   }, [apiScore, free]);
 
   const sections: SectionPresence | undefined = free?.sections_detected;
-  const heroSuggestions: Suggestion[] = free?.hero?.suggestions || [];
-  const nextSuggestions: Suggestion[] = free?.next_section?.suggestions || [];
-  const top3 = useMemo(() => {
-    const all = [...heroSuggestions, ...nextSuggestions];
-    return all
-      .sort((a, b) => impactRank(b.impact) - impactRank(a.impact))
-      .slice(0, 3);
-  }, [heroSuggestions, nextSuggestions]);
+  const topWorst = useMemo(() => (free ? worstFindings(free, 5) : []), [free]);
+  const quickWinsLift = useMemo(() => sumLiftPercent(topWorst), [topWorst]);
 
   const pageUrl = (free as any)?.page?.url || url || "";
   const apiShot = (free as any)?.assets?.screenshot_url as string | undefined;
@@ -270,7 +168,16 @@ export default function Landing() {
     onError,
   } = useSmartScreenshot(apiShot || null, pageUrl);
 
-  // ---------- actions ----------
+  // counters auto-increment (mazliet dzīves)
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCReports((v) => v + Math.floor(Math.random() * 3));
+      setCFulls((v) => v + (Math.random() < 0.2 ? 1 : 0));
+      setCDomains((v) => v + Math.floor(Math.random() * 2));
+    }, 4000);
+    return () => clearInterval(id);
+  }, []);
+
   const startTimers = (durationMs: number) => {
     const start = Date.now();
     const etaTimer = setInterval(() => {
@@ -293,8 +200,6 @@ export default function Landing() {
 
   const runTest = () => {
     if (!url.trim()) return;
-
-    // uzreiz rādām statusa joslu
     setPhase("loading");
     setReport(null);
     setErrorMsg("");
@@ -302,14 +207,11 @@ export default function Landing() {
     setProgress(0);
     setEta(15);
     startTimers(15000);
-
-    // neliela aizture vizuālai plūsmai, tad saucam API
     setTimeout(async () => {
       try {
         const r = await analyzeUrl(url, "free");
         setReport(r);
         setPhase("ready");
-        // scroll uz preview
         setTimeout(
           () => previewRef.current?.scrollIntoView({ behavior: "smooth" }),
           120
@@ -318,8 +220,6 @@ export default function Landing() {
         const msg = String(e?.message || "AI error");
         setErrorMsg(msg);
         setPhase("error");
-
-        // 429 → auto retry
         if (msg.includes("429")) {
           let t = 8;
           setRetryIn(t);
@@ -380,7 +280,7 @@ export default function Landing() {
           score: computedScore,
           subject: "Your Holbox AI Website Scorecard",
           message:
-            "Requesting my free website scorecard from Holbox AI (top weaknesses + quick fixes).",
+            "Requesting my free website scorecard (top weaknesses + quick fixes).",
         }),
       });
       if (!res.ok) throw new Error("Email endpoint error");
@@ -390,7 +290,7 @@ export default function Landing() {
     }
   };
 
-  // ---------- UI ----------
+  /* ========= UI ========= */
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
       {/* Dev banner */}
@@ -410,34 +310,13 @@ export default function Landing() {
             <div className="h-8 w-8 rounded-lg bg-[#006D77]" />
             <span className="font-semibold tracking-tight">Holbox AI</span>
           </div>
-          <nav className="hidden md:flex items-center gap-6 text-sm">
-            <a className="hover:opacity-80" href="#how">
-              How it works
-            </a>
-            <a className="hover:opacity-80" href="#preview">
-              Preview
-            </a>
-            <a className="hover:opacity-80" href="#pricing">
-              Pricing
-            </a>
-            <a className="hover:opacity-80" href="#faq">
-              FAQ
-            </a>
-          </nav>
-          <button
-            onClick={runTest}
-            disabled={phase === "loading" || !url.trim()}
-            className="rounded-xl px-4 py-2 text-white bg-[#E76F51] hover:bg-[#d86147] disabled:opacity-60"
-          >
-            {phase === "loading" ? "Running…" : "Run Free Test"}
-          </button>
         </div>
       </header>
 
       {/* HERO */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] to-[#83C5BE]" />
-        <div className="relative mx-auto max-w-[2030px] px-4 py-12 md:py-16 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
+        <div className="relative mx-auto max-w-[2030px] px-4 py-10 md:py-14 grid md:grid-cols-2 gap-8 md:gap-10 items-center">
           <div className="text-white">
             <h1 className="text-3xl md:text-5xl font-bold leading-tight">
               Get a Second Opinion on Your Website.
@@ -487,7 +366,7 @@ export default function Landing() {
             </div>
           </div>
 
-          {/* hero image */}
+          {/* hero dekoratīvais attēls (nemainām) */}
           <div className="hidden md:block">
             <div className="relative rounded-2xl border bg-white/90 p-3 shadow-xl overflow-hidden">
               <div className="pointer-events-none absolute -left-1/3 top-0 h-full w-1/2 rotate-12 bg-white/20 blur-2xl animate-glide" />
@@ -512,7 +391,7 @@ export default function Landing() {
       <section
         id="preview"
         ref={previewRef}
-        className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-12"
+        className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-10"
       >
         {phase === "idle" && (
           <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
@@ -559,49 +438,14 @@ export default function Landing() {
                   {computedScore ?? 75} / 100
                 </div>
               </div>
-            </div>
 
-            {/* Hero overlay */}
-            <div className="lg:col-span-2 grid gap-4">
-              {heroShot && top3.length ? (
-                <div className="p-3 rounded-2xl border bg-white">
-                  <div className="font-medium mb-1">Hero — Top Issues</div>
-                  <div className="relative rounded-xl overflow-hidden border bg-white h-[420px]">
-                    {shotLoading && (
-                      <div className="absolute inset-0 grid place-items-center bg-white/60 z-10">
-                        <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
-                      </div>
-                    )}
-                    {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                    <img
-                      src={heroShot || undefined}
-                      onLoad={onLoad}
-                      onError={onError}
-                      className={
-                        shotLoading
-                          ? "opacity-0 transition-opacity duration-300 w-full h-full object-cover"
-                          : "opacity-100 transition-opacity duration-300 w-full h-full object-cover"
-                      }
-                      style={{ objectPosition: "top" }}
-                    />
-                    <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
-                      <div className="font-medium mb-1">Top suggestions</div>
-                      <ul className="space-y-1">
-                        {top3.map((s, i) => (
-                          <li key={i}>
-                            • [{s.impact}] <b>{s.title}</b> — {s.recommendation}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
+              {/* Sections Present */}
               {sections && (
-                <div className="p-5 rounded-2xl border bg-white">
-                  <div className="font-medium mb-2">Sections Present</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+                <div className="mt-5 p-5 rounded-2xl border bg-white">
+                  <div className="text-sm font-medium mb-2">
+                    Sections Present
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
                     {Object.entries(sections).map(([k, v]) => (
                       <div key={k} className="flex items-center gap-2">
                         <span
@@ -617,6 +461,87 @@ export default function Landing() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* If you fix these… */}
+              {topWorst.length > 0 && (
+                <div className="mt-5 p-5 rounded-2xl border bg-white">
+                  <div className="text-sm text-slate-500">
+                    Potential lift (if all are done)
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-[#006D77]">
+                    ≈ +{quickWinsLift}% leads
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Estimate based on issue severity. Real results may vary.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Hero overlay + worst findings */}
+            <div className="lg:col-span-2 grid gap-4">
+              <div className="p-3 rounded-2xl border bg-white">
+                <div className="font-medium mb-1">Hero — Top Issues</div>
+                <div className="relative rounded-xl overflow-hidden border bg-white h-[420px]">
+                  {shotLoading && (
+                    <div className="absolute inset-0 grid place-items-center bg-white/60 z-10">
+                      <div className="h-8 w-8 border-2 border-slate-300 border-top-[#006D77] rounded-full animate-spin" />
+                    </div>
+                  )}
+                  {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                  <img
+                    src={heroShot || backupShot(pageUrl) || undefined}
+                    onLoad={onLoad}
+                    onError={onError}
+                    className={
+                      shotLoading
+                        ? "opacity-0 transition-opacity duration-300 w-full h-full object-cover"
+                        : "opacity-100 transition-opacity duration-300 w-full h-full object-cover"
+                    }
+                    style={{ objectPosition: "top" }}
+                  />
+                  {topWorst.length > 0 && (
+                    <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                      <div className="font-medium mb-1">Top suggestions</div>
+                      <ul className="space-y-1">
+                        {topWorst.slice(0, 3).map((s, i) => (
+                          <li key={i}>
+                            • [{s.impact}] <b>{s.title}</b> — {s.recommendation}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Worst 3–5 findings list */}
+              {topWorst.length > 0 && (
+                <div className="grid gap-3">
+                  {topWorst.map((f, i) => (
+                    <div
+                      key={i}
+                      className="p-4 rounded-xl border bg-white flex items-start gap-3"
+                    >
+                      <span
+                        className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                          f.impact === "high"
+                            ? "bg-red-500"
+                            : f.impact === "medium"
+                            ? "bg-amber-500"
+                            : "bg-emerald-500"
+                        }`}
+                      />
+                      <div>
+                        <div className="font-medium">{f.title}</div>
+                        <div className="text-sm text-slate-600 mt-0.5">
+                          {f.recommendation}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -640,7 +565,7 @@ export default function Landing() {
       </section>
 
       {/* SCORECARD */}
-      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12">
+      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-10">
         <div className="rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-2 gap-6 md:gap-8 items-center">
           <div>
             <h3 className="text-xl md:text-2xl font-semibold">
@@ -685,10 +610,10 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PRICING */}
+      {/* PRICING + BADGES */}
       <section
         id="pricing"
-        className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12"
+        className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-10"
       >
         <div className="rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-2 gap-6 md:gap-8 items-start">
           <div>
@@ -734,16 +659,38 @@ export default function Landing() {
                 className="w-full h-auto block"
               />
             </div>
-            {/* badges */}
-            <div className="rounded-2xl">
-              <BadgesRow />
+
+            {/* Counters */}
+            <div className="rounded-2xl border bg-white p-5 grid grid-cols-3 gap-4 text-center">
+              <div>
+                <div className="text-2xl font-semibold">
+                  {cReports.toLocaleString()}
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  Reports generated
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold">
+                  {cFulls.toLocaleString()}
+                </div>
+                <div className="text-xs text-slate-600 mt-1">Full reports</div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold">
+                  {cDomains.toLocaleString()}
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  Domains analyzed
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
       {/* CASE STUDY */}
-      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12">
+      <section className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-10">
         <div className="rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-3 gap-6 md:gap-8 items-center">
           <div className="md:col-span-2">
             <h3 className="text-2xl md:text-3xl font-semibold">
@@ -771,43 +718,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* FAQ + FOOTER (nemainīts) */}
-      <section
-        id="faq"
-        className="mx-auto max-w-[2030px] px-3 md:px-4 py-10 md:py-12"
-      >
-        <h3 className="text-2xl font-semibold">FAQ</h3>
-        <div className="mt-6 grid md:grid-cols-2 gap-6">
-          {[
-            [
-              "Does AI make mistakes?",
-              "The analysis is based on measurable data and CRO standards, but human validation is always possible.",
-            ],
-            [
-              "Do you need server access?",
-              "No, the audit runs on publicly available content only.",
-            ],
-            [
-              "Are my data secure?",
-              "Reports are deleted after 14 days unless permanent access is purchased.",
-            ],
-            [
-              "Which pages are scanned?",
-              "Key pages like home, product/service, and forms/checkout (configurable).",
-            ],
-            [
-              "Can I use this to evaluate the work of my marketing team or agency?",
-              "Yes. Many of our customers use Holbox AI to get an unbiased report on a new website or landing page. It's the fastest way to get a second opinion and ensure you're getting a great return on your investment.",
-            ],
-          ].map((f, i) => (
-            <div key={i} className="rounded-2xl border bg-white p-5">
-              <div className="font-medium">{f[0]}</div>
-              <p className="mt-1 text-slate-600 text-sm">{f[1]}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
+      {/* FOOTER */}
       <footer className="border-t">
         <div className="mx-auto max-w-[2030px] px-3 md:px-4 py-8 md:py-10 flex flex-col md:flex-row items-center justify-between gap-3 md:gap-4 text-sm text-slate-600">
           <div className="flex items-center gap-2">

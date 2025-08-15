@@ -1,106 +1,62 @@
-// src/lib/analyze.ts
-
-/** ----------------- Types ----------------- */
-export type ImpactLevel = "high" | "medium" | "low";
+export type Impact = "high" | "medium" | "low";
 
 export type Suggestion = {
   title: string;
-  impact: ImpactLevel;
+  impact: Impact;
   recommendation: string;
 };
 
-export type SectionPresence = Record<string, boolean>;
-
-export type BacklogItem = {
-  title: string;
-  impact: number; // 1..3 (higher = bigger impact)
-  effort: number; // 1..3 (higher = more effort)
-  eta_days?: number;
-  notes?: string;
+export type SectionPresence = {
+  hero?: boolean;
+  value_prop?: boolean;
+  social_proof?: boolean;
+  features?: boolean;
+  pricing?: boolean;
+  faq?: boolean;
+  contact?: boolean;
+  footer?: boolean;
+  [k: string]: boolean | undefined;
 };
 
-export type ContentAuditItem = {
-  section: string; // e.g., "hero" | "value_prop" | "social_proof" | ...
-  status: "ok" | "weak" | "missing";
-  rationale?: string;
-  suggestions?: string[];
-};
-
-/** Minimal/free report (what the landing shows without email) */
 export type FreeReport = {
-  score?: number;
-  summary?: string;
-  key_findings?: Suggestion[];
-  quick_wins?: string[];
-  risks?: string[];
-  sections_detected?: SectionPresence;
-
-  // lightweight copy hints for UI
-  hero?: { suggestions?: Suggestion[] };
-  next_section?: { suggestions?: Suggestion[] };
-
-  // assets + url fallback
-  assets?: { screenshot_url?: string | null };
-  url?: string;
-};
-
-/** Full report (after purchase/dev shortcut) */
-export type FullReport = {
-  score: number;
-  summary: string;
-  key_findings: Suggestion[];
-  quick_wins: string[];
-  risks?: string[];
-  sections_detected?: SectionPresence;
-
-  findings: Suggestion[];
-  prioritized_backlog?: BacklogItem[];
-  content_audit?: ContentAuditItem[];
-
   page?: { url?: string; title?: string };
-  assets?: {
-    screenshot_url?: string | null;
-    suggested_screenshot_url?: string | null;
-  };
+  assets?: { screenshot_url?: string | null };
+  score?: number; // var nebūt
+  sections_detected?: SectionPresence;
+  hero?: { suggestions?: Suggestion[] | null };
+  next_section?: { name?: string; suggestions?: Suggestion[] | null };
+  // Dažos variantos var būt arī kopējie atradumi:
+  // findings?: Suggestion[];
 };
 
-export type CroReport = FreeReport | FullReport;
+export type CroReport = FreeReport; // šobrīd pietiek; pilnajam reportam varēsi paplašināt
 
-/** ----------------- Helpers ----------------- */
-export function normalizeUrl(input: string): string {
-  const s = (input || "").trim();
-  if (!s) return s;
-  if (/^https?:\/\//i.test(s)) return s;
-  return `https://${s}`;
-}
-
-/** ----------------- API Client ----------------- */
+/** Vienkāršs klienta fetch uz mūsu Vercel API. */
 export async function analyzeUrl(
   url: string,
   mode: "free" | "full" = "free"
 ): Promise<CroReport> {
-  const normalized = normalizeUrl(url);
-
+  const body = JSON.stringify({ url, mode });
   const res = await fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: normalized, mode }),
+    body,
   });
 
-  // Read as text first so HTML error pages don’t crash .json()
-  const text = await res.text();
-  let json: any;
+  // API var sūtīt 200 ar kļūdas objektu – normalizējam:
+  let json: any = null;
   try {
-    json = JSON.parse(text);
+    json = await res.json();
   } catch {
-    // Not JSON; surface the raw body for debugging
-    throw new Error(`Analyze failed: ${res.status} ${text}`);
+    throw new Error(`Analyze failed: ${res.status}`);
   }
 
-  if (!res.ok) {
-    // Server already sent JSON error; include it verbatim
-    throw new Error(`Analyze failed: ${res.status} ${JSON.stringify(json)}`);
+  if (!res.ok || json?.error) {
+    const msg =
+      typeof json?.error === "string"
+        ? json.error
+        : json?.error?.message || `Analyze failed: ${res.status}`;
+    throw new Error(msg);
   }
-
   return json as CroReport;
 }
