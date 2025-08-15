@@ -1,77 +1,153 @@
-import type { FullReport } from "./analyze";
+import type {
+  FullReport,
+  Impact,
+  Suggestion,
+  ContentAuditItem,
+} from "./analyze";
 
-export const sampleFullReport: FullReport = {
-  score: 74,
-  summary:
-    "Solid baseline, but hero clarity and CTA contrast limit conversions.",
-  key_findings: [
-    {
-      title: "Hero message unclear on mobile",
-      impact: "low",
-      recommendation: "Shorten headline and keep CTA in first viewport.",
-    },
-    {
-      title: "Primary CTA has low contrast",
-      impact: "low",
-      recommendation: "Increase color contrast and add hover/focus styles.",
-    },
-  ],
-  quick_wins: [
-    "Compress hero image",
-    "Move CTA above fold",
-    "Add social proof",
-  ],
-  risks: [],
-  sections_detected: {
-    hero: true,
-    value_prop: true,
-    social_proof: false,
-    pricing: false,
-    features: true,
-    faq: true,
-    contact: true,
-    footer: true,
+/** Helpers */
+const hi: Impact = "high";
+const med: Impact = "medium";
+const low: Impact = "low";
+
+function mshot(u: string) {
+  const abs = u.startsWith("http") ? u : `https://${u}`;
+  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(abs)}?w=1200`;
+}
+
+/** Reusable suggestion snippets */
+const heroSuggestions: Suggestion[] = [
+  {
+    title: "Hero value unclear",
+    impact: hi,
+    recommendation:
+      "State the core benefit in the first line and keep CTAs above the fold.",
   },
-  findings: [
-    {
-      title: "Hero value unclear on mobile — hero",
-      impact: "low",
-      recommendation: "Shorten headline and keep CTA in the first viewport.",
-    },
-    {
-      title: "Primary CTA low contrast — hero",
-      impact: "low",
-      recommendation: "Increase color contrast and add hover/focus styles.",
-    },
-    {
-      title: "LCP image oversized — performance",
-      impact: "medium",
-      recommendation:
-        "Serve responsive images (srcset) and preload hero asset.",
-    },
-  ],
-  prioritized_backlog: [
-    { title: "Fix hero value + CTA", impact: 3, effort: 1, eta_days: 1 },
-    { title: "Responsive hero image", impact: 3, effort: 2, eta_days: 2 },
-    { title: "Add trust badges", impact: 2, effort: 1, eta_days: 1 },
-  ],
-  content_audit: [
-    {
-      section: "hero",
-      status: "weak",
-      rationale:
-        "Headline not benefit-driven; CTA not visible on first viewport on smaller screens.",
-      suggestions: [
-        "Rewrite headline to reflect primary outcome.",
-        "Ensure CTA is visible without scrolling on mobile.",
-      ],
-    },
-  ],
-  page: { url: "https://example.com", title: "Example – Landing" },
-  assets: {
-    screenshot_url:
-      "https://dummyimage.com/1200x700/edf2f7/111827.png&text=Screenshot",
-    suggested_screenshot_url:
-      "https://dummyimage.com/1200x700/f7fafc/111827.png&text=Suggested",
+  {
+    title: "Weak CTA contrast",
+    impact: med,
+    recommendation:
+      "Increase color contrast and add hover/focus styles to the primary button.",
   },
-};
+  {
+    title: "Slow hero image",
+    impact: low,
+    recommendation:
+      "Serve responsive images (srcset) and consider preloading the hero asset.",
+  },
+];
+
+const nextSectionSuggestions: Suggestion[] = [
+  {
+    title: "Value prop is vague",
+    impact: med,
+    recommendation: "Use concrete outcomes and remove filler text.",
+  },
+  {
+    title: "Missing trust indicators",
+    impact: med,
+    recommendation: "Add testimonials or client logos for social proof.",
+  },
+];
+
+const findings: Suggestion[] = [
+  ...heroSuggestions,
+  ...nextSectionSuggestions.slice(0, 1),
+];
+
+const contentAudit: ContentAuditItem[] = [
+  {
+    section: "hero",
+    present: true,
+    quality: "poor",
+    suggestion: "Tighten headline; add strong CTA.",
+  },
+  {
+    section: "value prop",
+    present: true,
+    quality: "ok",
+    suggestion: "Clarify copy with measurable outcomes.",
+  },
+  {
+    section: "social proof",
+    present: false,
+    suggestion: "Add 2–3 testimonials or client logos.",
+  },
+  {
+    section: "features",
+    present: true,
+    quality: "ok",
+    suggestion: "Group features into 3–5 bullets with benefits.",
+  },
+  {
+    section: "pricing",
+    present: false,
+    suggestion: "Add pricing info or a clear 'Talk to sales' alternative.",
+  },
+  {
+    section: "faq",
+    present: true,
+    quality: "ok",
+    suggestion: "Use accordion for readability and link to policies.",
+  },
+  { section: "contact", present: true, quality: "good" },
+  { section: "footer", present: true, quality: "good" },
+];
+
+export function sampleFull(url: string): FullReport {
+  const shot = mshot(url);
+
+  return {
+    page: { url, title: "Sample Landing Page" },
+    assets: { screenshot_url: shot },
+    score: 74,
+    sections_detected: {
+      hero: true,
+      value_prop: true,
+      social_proof: false,
+      features: true,
+      pricing: false,
+      faq: true,
+      contact: true,
+      footer: true,
+    },
+    hero: { suggestions: heroSuggestions },
+    next_section: { name: "value prop", suggestions: nextSectionSuggestions },
+    findings,
+    quick_wins: [
+      "Compress hero image",
+      "Move CTA above the fold",
+      "Add social proof",
+    ],
+    content_audit: contentAudit,
+    prioritized_backlog: [
+      {
+        title: "Revise hero section copy",
+        impact: hi,
+        effort_days: 2,
+        eta_days: 5,
+        lift_percent: 20,
+      },
+      {
+        title: "Integrate testimonials",
+        impact: med,
+        effort_days: 3,
+        eta_days: 7,
+        lift_percent: 10,
+      },
+      {
+        title: "Improve navigation flow",
+        impact: med,
+        effort_days: 2,
+        eta_days: 4,
+        lift_percent: 5,
+      },
+    ],
+    screenshots: {
+      hero: shot,
+      sections: {
+        hero: shot,
+      },
+    },
+  };
+}
