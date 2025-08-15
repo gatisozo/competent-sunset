@@ -44,26 +44,6 @@ function backupShot(u: string) {
   return SCREENSHOT_URL_TMPL.replace("{URL}", encodeURIComponent(abs));
 }
 
-/** pagaidu score, ja free atskaitē nav skaitļa */
-function provisionalScore(r: FreeReport): number {
-  // vienkāršs heuristisks modelītis:
-  const list: Suggestion[] = [
-    ...(r.hero?.suggestions || []),
-    ...(r.next_section?.suggestions || []),
-    ...(r.findings || []),
-  ];
-  if (!list.length) return 60;
-
-  // sākam no 84 un atņemam par katru high/med/low ieteikumu
-  let score = 84;
-  for (const s of list) {
-    if (s.impact === "high") score -= 4;
-    else if (s.impact === "medium") score -= 2;
-    else score -= 1;
-  }
-  return Math.max(20, Math.min(98, Math.round(score)));
-}
-
 /** gudrs screenshot loaderis ar spinner + atkārtojumiem */
 function useSmartScreenshot(primary?: string | null, pageUrl?: string) {
   const initial = primary || (pageUrl ? backupShot(pageUrl) : null);
