@@ -4,33 +4,44 @@ import Features from "./components/Features";
 import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
 
-/**
- * Palīgfunkcijas drošam grading (ja nav utilu vai AI atbildes).
- * Piezīme: ja tev ir normalizeFreeReport u.c., vari droši aizvietot šīs.
- */
+/** Props ko drīkst padot no App.tsx */
+type LandingProps = {
+  freeReport?: any; // vari izmantot, ja gribi iebarot jau sagatavotu free reportu
+  onRunTest?: (url: string) => Promise<void> | void;
+  onOrderFull?: () => void;
+  onSeeSample?: () => void;
+};
+
+/** Palīgfunkcijas drošam grading (fallbacks) */
 function safePct(n?: number) {
   if (typeof n === "number" && isFinite(n))
     return Math.max(0, Math.min(100, n));
   return 0;
 }
 
-export default function Landing() {
+export default function Landing({
+  freeReport: _freeReport, // šobrīd netiek izmantots, bet akceptēts lai App.tsx var padot
+  onRunTest,
+  onOrderFull,
+  onSeeSample,
+}: LandingProps) {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // DEMO rezultātu “score” — aizstāj ar reālo AI rezultātu no tavas analīzes
-  const demoScore = 75; // saglabāju kā tev bija
-  const structurePct = 0; // ja nav datu — 0, citādi ieliec reālo
+  // DEMO score — aizstāj ar reālajiem datiem no analīzes, ja vajag
+  const demoScore = 75;
+  const structurePct = 0;
   const contentPct = 13;
 
+  // Iekšējais demo "Run" (ja App nepado onRunTest)
   const runTest = () => {
     if (!url.trim()) return;
     setLoading(true);
     setShowResults(false);
 
-    // demo “progress”
+    // demo progress (5s)
     const start = Date.now();
     const duration = 5000;
     const tick = () => {
@@ -53,11 +64,19 @@ export default function Landing() {
     requestAnimationFrame(tick);
   };
 
-  const handleSeeSample = () => {
-    window.location.href = "/full?dev=1";
+  // Wrapper, kas izvēlas ārējo vai iekšējo run
+  const handleRun = () => {
+    if (!url.trim()) return;
+    if (onRunTest) return onRunTest(url);
+    runTest();
   };
-  const handleOrderFull = () => {
+
+  // Noklusētie ceļi pilnajam reportam / sample
+  const orderFullInternal = () => {
     window.location.href = "/full";
+  };
+  const seeSampleInternal = () => {
+    window.location.href = "/full?dev=1";
   };
 
   return (
@@ -84,7 +103,7 @@ export default function Landing() {
             </a>
           </nav>
           <button
-            onClick={runTest}
+            onClick={handleRun}
             className="rounded-xl px-4 py-2 text-white bg-[#006D77] hover:opacity-90"
           >
             Run Free Test
@@ -110,11 +129,11 @@ export default function Landing() {
                 placeholder="Enter your website URL"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && runTest()}
+                onKeyDown={(e) => e.key === "Enter" && handleRun()}
                 className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
               />
               <button
-                onClick={runTest}
+                onClick={handleRun}
                 disabled={loading || !url.trim()}
                 className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
               >
@@ -141,7 +160,7 @@ export default function Landing() {
             </div>
           </div>
 
-          {/* Hero labā puse – placeholder (šobrīd attēls) */}
+          {/* Hero preview panel (attēls/placeholder) */}
           <div className="bg-white/80 rounded-2xl p-6 shadow-xl">
             <div className="h-48 md:h-56 rounded-xl bg-slate-100 border grid place-items-center text-slate-500">
               Hero Preview Placeholder
@@ -154,7 +173,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PREVIEW / FREE REPORT CARDS */}
+      {/* PREVIEW */}
       <section
         id="preview"
         ref={previewRef}
@@ -166,7 +185,7 @@ export default function Landing() {
           </div>
         ) : (
           <>
-            {/* Grade — jauna vizualizācija */}
+            {/* Grade + sub-scores */}
             <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
               <div className="rounded-2xl border bg-white p-5 md:p-6">
                 <div className="flex items-center justify-between">
@@ -227,7 +246,7 @@ export default function Landing() {
               </div>
             </div>
 
-            {/* Scorecard CTA (paliek kā bija) */}
+            {/* Scorecard CTA */}
             <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
               <div>
                 <h3 className="text-xl md:text-2xl font-semibold">
@@ -249,7 +268,7 @@ export default function Landing() {
               </form>
             </div>
 
-            {/* Full audit piedāvājums (paliek) */}
+            {/* Full Audit piedāvājums */}
             <section className="mt-12 rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
               <div>
                 <h3 className="text-2xl md:text-3xl font-semibold">
@@ -269,13 +288,13 @@ export default function Landing() {
                 </ul>
                 <div className="mt-6 flex gap-3">
                   <button
-                    onClick={handleOrderFull}
+                    onClick={onOrderFull ?? orderFullInternal}
                     className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
                   >
                     Order Full Audit
                   </button>
                   <button
-                    onClick={handleSeeSample}
+                    onClick={onSeeSample ?? seeSampleInternal}
                     className="rounded-xl px-5 py-3 border font-medium hover:bg-slate-50"
                   >
                     See Sample Report
@@ -295,7 +314,7 @@ export default function Landing() {
         )}
       </section>
 
-      {/* BENEFITS (tavs before/after bloks paliek netraucēts) */}
+      {/* Case study (kā bija) */}
       <section className="mx-auto max-w-[1200px] px-4 py-14">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 items-center">
           <div className="md:col-span-2">
@@ -322,7 +341,7 @@ export default function Landing() {
 
       {/* FEATURES */}
       <div id="features">
-        <Features onPrimaryClick={runTest} />
+        <Features onPrimaryClick={handleRun} />
       </div>
 
       {/* FAQ + CTA */}
@@ -359,7 +378,7 @@ export default function Landing() {
         </div>
         <div className="mt-6">
           <button
-            onClick={runTest}
+            onClick={handleRun}
             className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
           >
             Still have questions? Get a Free Scorecard
