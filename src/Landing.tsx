@@ -1,21 +1,23 @@
 // src/Landing.tsx
 import React, { useMemo, useState } from "react";
-import heroUrl from "/hero.png"; // ja izmanto public/hero.png
+import heroUrl from "/hero.png";
 import { Tabs } from "./components/Tabs";
 import { GradeBadge } from "./components/GradeBadge";
 import { BlurPanel } from "./components/BlurPanel";
 import { MetricTile } from "./components/MetricTile";
 import { SmartShot } from "./components/SmartShot";
 import {
-  FreeReportNormalized,
   normalizeFreeReport,
   letterFromScore,
   topFindings,
   estimateUpliftPct,
+  type FreeReportNormalized,
+  type Finding,
+  type BacklogItem,
 } from "./lib/grading";
 
 type Props = {
-  freeReport?: any; // izejošie dati no /api/analyze (free)
+  freeReport?: any; // dati no /api/analyze (free)
   onRunTest?: (url: string) => void;
   onOrderFull?: () => void;
   onSeeSample?: () => void;
@@ -29,6 +31,17 @@ const TABS = [
   { id: "findings", label: "Findings" },
   { id: "content", label: "Content Audit" },
   { id: "copy", label: "Copy Suggestions" },
+];
+
+const DEFAULT_SECTIONS = [
+  "hero",
+  "value prop",
+  "social proof",
+  "features",
+  "pricing",
+  "faq",
+  "contact",
+  "footer",
 ];
 
 export default function Landing({
@@ -50,14 +63,33 @@ export default function Landing({
     }
   }, [freeReport]);
 
-  const structurePct = n?.structure_pct ?? 76;
-  const contentPct = n?.content_pct ?? 70;
+  // Map uz jaunajiem laukiem no grading utilīša
+  const structurePct = n?.structureScore ?? 76;
+  const contentPct = n?.contentScore ?? 70;
   const score = n?.score ?? Math.round((structurePct + contentPct) / 2);
-  const uplift = n ? estimateUpliftPct(n) : 18;
   const headlineLetter = letterFromScore(score);
-  const top = n ? topFindings(n, 5) : [];
+
+  const uplift = n ? estimateUpliftPct(n.prioritized_backlog || []) : 18;
+  const top: Finding[] = n ? topFindings(n.findings || [], 5) : [];
+
+  // Sections present/missing no record -> masīvi
+  const presentSections: string[] = useMemo(() => {
+    if (!n) return [];
+    return Object.entries(n.sections_present || {})
+      .filter(([, v]) => !!v)
+      .map(([k]) => k);
+  }, [n]);
+
+  const missingSections: string[] = useMemo(() => {
+    if (!n) return DEFAULT_SECTIONS;
+    const presentSet = new Set(presentSections.map((s) => s.toLowerCase()));
+    return DEFAULT_SECTIONS.filter((s) => !presentSet.has(s.toLowerCase()));
+  }, [n, presentSections]);
 
   const hasReport = !!n;
+
+  const rawUrl: string =
+    typeof freeReport?.url === "string" ? freeReport.url : "";
 
   function run() {
     if (!url.trim()) return;
@@ -208,12 +240,12 @@ export default function Landing({
 
               {hasReport && tab === "overall" && n && (
                 <div className="grid md:grid-cols-2 gap-6">
-                  <SmartShot url={n.url || ""} className="min-h-[260px]" />
+                  <SmartShot url={rawUrl} className="min-h-[260px]" />
                   <div className="grid gap-3">
                     <div className="font-medium">Top Issues</div>
                     <ul className="space-y-3">
                       {top.length ? (
-                        top.map((f, i) => (
+                        top.map((f: Finding, i: number) => (
                           <li key={i} className="rounded-xl border p-3">
                             <div className="flex items-center gap-2">
                               <SeverityDot level={f.impact || "medium"} />
@@ -240,22 +272,15 @@ export default function Landing({
 
               {hasReport && tab === "sections" && n && (
                 <div className="grid md:grid-cols-2 gap-6">
-                  <SectionList
-                    title="Present"
-                    items={n.sections_present || []}
-                    ok
-                  />
-                  <SectionList
-                    title="Missing"
-                    items={n.sections_missing || []}
-                  />
+                  <SectionList title="Present" items={presentSections} ok />
+                  <SectionList title="Missing" items={missingSections} />
                 </div>
               )}
 
               {hasReport && tab === "quickwins" && n && (
                 <div className="grid gap-3">
                   {(n.quick_wins || []).length ? (
-                    (n.quick_wins || []).map((w, i) => (
+                    (n.quick_wins || []).map((w: string, i: number) => (
                       <div
                         key={i}
                         className="rounded-xl border p-3 flex items-center justify-between"
@@ -280,29 +305,36 @@ export default function Landing({
               {hasReport && tab === "backlog" && n && (
                 <div className="grid gap-3">
                   {(n.prioritized_backlog || []).length ? (
-                    (n.prioritized_backlog || []).map((b, i) => (
-                      <div key={i} className="rounded-xl border p-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="font-medium">{b.title}</div>
-                          <div className="flex gap-2 text-xs">
-                            <Chip>{`Impact: ${b.impact || "high"}`}</Chip>
-                            {typeof b.effort_days === "number" && (
-                              <Chip>{`Effort: ${b.effort_days}d`}</Chip>
-                            )}
-                            {typeof b.uplift_pct === "number" && (
-                              <Chip className="bg-emerald-50 text-emerald-700 border-emerald-200">
-                                ≈ +{b.uplift_pct}% leads
-                              </Chip>
-                            )}
+                    (n.prioritized_backlog || []).map(
+                      (
+                        b: BacklogItem & { note?: string; uplift_pct?: number },
+                        i: number
+                      ) => (
+                        <div key={i} className="rounded-xl border p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-medium">{b.title}</div>
+                            <div className="flex gap-2 text-xs">
+                              <Chip>{`Impact: ${b.impact || "high"}`}</Chip>
+                              {typeof (b as any).effort_days === "number" && (
+                                <Chip>{`Effort: ${
+                                  (b as any).effort_days
+                                }d`}</Chip>
+                              )}
+                              {typeof (b as any).uplift_pct === "number" && (
+                                <Chip className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                                  ≈ +{(b as any).uplift_pct}% leads
+                                </Chip>
+                              )}
+                            </div>
                           </div>
+                          {(b as any).note && (
+                            <div className="mt-1 text-sm text-slate-600">
+                              {(b as any).note}
+                            </div>
+                          )}
                         </div>
-                        {b.note && (
-                          <div className="mt-1 text-sm text-slate-600">
-                            {b.note}
-                          </div>
-                        )}
-                      </div>
-                    ))
+                      )
+                    )
                   ) : (
                     <div className="text-sm text-slate-600">
                       No prioritized backlog yet.
@@ -375,7 +407,7 @@ export default function Landing({
             ["Quick Wins", "3–5 changes you can do today."],
             ["Copy suggestions", "Stronger headlines and CTAs ready to adapt."],
             ["Benchmarks", "See position vs similar sites in your vertical."],
-          ].map(([h, d], i) => (
+          ].map(([h, d], i: number) => (
             <div key={i} className="rounded-2xl border bg-white p-5">
               <div className="font-medium">{h}</div>
               <div className="mt-1 text-sm text-slate-600">{d}</div>
@@ -417,13 +449,11 @@ export default function Landing({
           </div>
         </div>
       </section>
-
-      {/* FAQ anchor & Footer paliek kā tev projektā */}
     </div>
   );
 }
 
-/* — helpers (iekšējie komponenti) — */
+/* — helpers (iekšējie komponenti) jaa— */
 
 function ScorePill({ label, pct }: { label: string; pct: number }) {
   return (
@@ -464,7 +494,7 @@ function SectionList({
       <div className="font-medium">{title}</div>
       <ul className="mt-2 grid grid-cols-2 gap-2 text-sm">
         {items.length ? (
-          items.map((s, i) => (
+          items.map((s: string, i: number) => (
             <li key={i} className="flex items-center gap-2">
               <span
                 className={`h-2 w-2 rounded-full ${
@@ -495,3 +525,4 @@ function Chip({
     </span>
   );
 }
+ 

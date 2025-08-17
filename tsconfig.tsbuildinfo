@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/lib/analyze.ts"],"version":"5.9.2"}
+{"root":["./src/App.tsx","./src/Landing.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/BlurPanel.tsx","./src/components/FullReportView.tsx","./src/components/GradeBadge.tsx","./src/components/MetricTile.tsx","./src/components/SmartShot.tsx","./src/components/Tabs.tsx","./src/lib/analyze.ts","./src/lib/grading.ts","./src/lib/sample.ts"],"version":"5.9.2"}
