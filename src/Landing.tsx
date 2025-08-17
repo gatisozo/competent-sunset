@@ -6,13 +6,13 @@ import ContactForm from "./components/ContactForm";
 
 /** Props ko drīkst padot no App.tsx */
 type LandingProps = {
-  freeReport?: any; // vari izmantot, ja gribi iebarot jau sagatavotu free reportu
-  onRunTest?: (url: string) => Promise<void> | void;
+  freeReport?: any; // ja vajadzēs barot ar realajiem datiem
+  onRunTest?: (url: string) => Promise<void> | void; // ārējais analizētājs (neobligāts)
   onOrderFull?: () => void;
   onSeeSample?: () => void;
 };
 
-/** Palīgfunkcijas drošam grading (fallbacks) */
+/** Palīgfunkcija drošai % vizualizācijai */
 function safePct(n?: number) {
   if (typeof n === "number" && isFinite(n))
     return Math.max(0, Math.min(100, n));
@@ -20,7 +20,7 @@ function safePct(n?: number) {
 }
 
 export default function Landing({
-  freeReport: _freeReport, // šobrīd netiek izmantots, bet akceptēts lai App.tsx var padot
+  freeReport: _freeReport,
   onRunTest,
   onOrderFull,
   onSeeSample,
@@ -30,20 +30,19 @@ export default function Landing({
   const [showResults, setShowResults] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // DEMO score — aizstāj ar reālajiem datiem no analīzes, ja vajag
+  // DEMO vērtības (aizstāj ar reāliem datiem, kad būs)
   const demoScore = 75;
   const structurePct = 0;
   const contentPct = 13;
 
-  // Iekšējais demo "Run" (ja App nepado onRunTest)
+  /** Iekšējais demo process (progress + scroll uz rezultātiem) */
   const runTest = () => {
     if (!url.trim()) return;
     setLoading(true);
     setShowResults(false);
 
-    // demo progress (5s)
     const start = Date.now();
-    const duration = 5000;
+    const duration = 5000; // 5s demo
     const tick = () => {
       const p = Math.min(1, (Date.now() - start) / duration);
       if (p < 1) {
@@ -51,25 +50,38 @@ export default function Landing({
       } else {
         setLoading(false);
         setShowResults(true);
-        setTimeout(
-          () =>
-            previewRef.current?.scrollIntoView({
-              behavior: "smooth",
-              block: "start",
-            }),
-          100
-        );
+        setTimeout(() => {
+          previewRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }, 100);
       }
     };
     requestAnimationFrame(tick);
   };
 
-  // Wrapper, kas izvēlas ārējo vai iekšējo run
+  /** Vienmēr palaižam iekšējo demo + (ja ir) fonā ārējo analizētāju */
   const handleRun = () => {
     if (!url.trim()) return;
-    if (onRunTest) return onRunTest(url);
+
+    // 1) uzreiz parādam animāciju/rezultātu demā
     runTest();
+
+    // 2) paralēli palaižam ārējo analizētāju (ja padots no App.tsx)
+    if (onRunTest) {
+      try {
+        Promise.resolve(onRunTest(normalizeUrl(url))).catch(() => {
+          /* klusām */
+        });
+      } catch {
+        /* klusām */
+      }
+    }
   };
+
+  const normalizeUrl = (u: string) =>
+    u.startsWith("http") ? u : `https://${u}`;
 
   // Noklusētie ceļi pilnajam reportam / sample
   const orderFullInternal = () => {
@@ -78,66 +90,6 @@ export default function Landing({
   const seeSampleInternal = () => {
     window.location.href = "/full?dev=1";
   };
-// ...imports un state kā iepriekš
-
-// IEKŠĒJAIS DEMO "RUN" NEMAINĀS
-const runTest = () => {
-  if (!url.trim()) return;
-  setLoading(true);
-  setShowResults(false);
-
-  const start = Date.now();
-  const duration = 5000; // 5s demo
-  const tick = () => {
-    const p = Math.min(1, (Date.now() - start) / duration);
-    if (p < 1) {
-      requestAnimationFrame(tick);
-    } else {
-      setLoading(false);
-      setShowResults(true);
-      setTimeout(() => {
-        previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 100);
-    }
-  };
-  requestAnimationFrame(tick);
-};
-
-// JAUNS handleRun — vienmēr startē iekšējo demo + fonā izsauc ārējo
-const handleRun = () => {
-  if (!url.trim()) return;
-
-  // 1) uzreiz parādam animāciju un preview (demo)
-  runTest();
-
-  // 2) ja App padod reālu analizētāju — palaižam fonā
-  if (onRunTest) {
-    try {
-      // negaidām, lai netraucē animācijai
-      Promise.resolve(onRunTest(url)).catch(() => {/* klusām */});
-    } catch {
-      /* klusām */
-    }
-  }
-};
-
-// ...JSX input laukam jau bija:
-<input
-  aria-label="Enter your website URL"
-  placeholder="Enter your website URL"
-  value={url}
-  onChange={(e) => setUrl(e.target.value)}
-  onKeyDown={(e) => e.key === "Enter" && handleRun()}  // Enter strādā
-  className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
-/>
-
-<button
-  onClick={handleRun}         // Klikšķis arī strādā
-  disabled={loading || !url.trim()}
-  className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
->
-  {loading ? "Running…" : "Run Free Test"}
-</button>
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -164,7 +116,8 @@ const handleRun = () => {
           </nav>
           <button
             onClick={handleRun}
-            className="rounded-xl px-4 py-2 text-white bg-[#006D77] hover:opacity-90"
+            disabled={loading || !url.trim()}
+            className="rounded-xl px-4 py-2 text-white bg-[#006D77] hover:opacity-90 disabled:opacity-60"
           >
             Run Free Test
           </button>
@@ -183,23 +136,31 @@ const handleRun = () => {
               The AI tool that instantly grades your landing pages and gives you
               an action plan to hold your team accountable.
             </p>
-            <div className="mt-5 flex gap-3">
+
+            {/* URL input + poga kā forma → Enter vienmēr darbojas */}
+            <form
+              className="mt-5 flex gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleRun();
+              }}
+            >
               <input
                 aria-label="Enter your website URL"
                 placeholder="Enter your website URL"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleRun()}
                 className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
               />
               <button
-                onClick={handleRun}
+                type="submit"
                 disabled={loading || !url.trim()}
-                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
+                className="rounded-xl px-5 py-3 bg-[#FF6B6B] text-white font-semibold shadow-sm hover:opacity-90 disabled:opacity-60"
               >
                 {loading ? "Running…" : "Run Free Test"}
               </button>
-            </div>
+            </form>
+
             <div className="mt-3 flex flex-wrap items-center gap-4 text-white/80 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -317,12 +278,21 @@ const handleRun = () => {
                   few quick fixes. No credit card, no spam.
                 </p>
               </div>
-              <form className="flex w-full flex-col sm:flex-row gap-3">
+              <form
+                className="flex w-full flex-col sm:flex-row gap-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  // TODO: integrēt e-pasta nosūtīšanu
+                }}
+              >
                 <input
                   placeholder="Enter your email"
                   className="flex-1 rounded-xl px-4 py-3 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
                 />
-                <button className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90">
+                <button
+                  type="submit"
+                  className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
+                >
                   Get My Free Scorecard
                 </button>
               </form>
@@ -374,7 +344,7 @@ const handleRun = () => {
         )}
       </section>
 
-      {/* Case study (kā bija) */}
+      {/* Case study (saglabāts) */}
       <section className="mx-auto max-w-[1200px] px-4 py-14">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 items-center">
           <div className="md:col-span-2">

@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 
-function useCountUp(target: number, duration = 1200, startWhenVisible = true) {
+function useCountUp(target: number, duration = 1200) {
   const [val, setVal] = useState(0);
   const elRef = useRef<HTMLDivElement | null>(null);
   const started = useRef(false);
 
   useEffect(() => {
-    if (!startWhenVisible) return;
-
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && !started.current) {
@@ -23,10 +21,9 @@ function useCountUp(target: number, duration = 1200, startWhenVisible = true) {
       },
       { threshold: 0.3 }
     );
-
     if (elRef.current) io.observe(elRef.current);
     return () => io.disconnect();
-  }, [target, duration, startWhenVisible]);
+  }, [target, duration]);
 
   return { val, elRef };
 }

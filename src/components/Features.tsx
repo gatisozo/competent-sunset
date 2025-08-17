@@ -6,7 +6,12 @@ const items = [
     desc: "We scan layout, message clarity, forms and performance cues.",
     icon: (
       <svg viewBox="0 0 24 24" className="h-6 w-6">
-        <path d="M10 18a8 8 0 1 1 5.3-14.1L22 10l-2 2-2-2-2 2 2 2-2 2-2-2A8 8 0 0 1 10 18Z" />
+        <path
+          d="M7 7h10M7 12h10M7 17h6"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+        />
       </svg>
     ),
   },
@@ -15,7 +20,12 @@ const items = [
     desc: "We mark exactly where & why to fix.",
     icon: (
       <svg viewBox="0 0 24 24" className="h-6 w-6">
-        <path d="M4 6h4l2-2h4l2 2h4v12H4z" />
+        <path
+          d="M4 6h4l2-2h4l2 2h4v12H4z"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+        />
       </svg>
     ),
   },
@@ -24,7 +34,12 @@ const items = [
     desc: "Impact vs Effort — hand straight to dev/freelancer.",
     icon: (
       <svg viewBox="0 0 24 24" className="h-6 w-6">
-        <path d="M7 7h10M7 12h10M7 17h6" />
+        <path
+          d="M5 7h14M5 12h10M5 17h8"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+        />
       </svg>
     ),
   },
@@ -33,7 +48,12 @@ const items = [
     desc: "3–5 easy changes you can do today.",
     icon: (
       <svg viewBox="0 0 24 24" className="h-6 w-6">
-        <path d="m5 13 4 4L19 7" />
+        <path
+          d="m5 13 4 4L19 7"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+        />
       </svg>
     ),
   },
@@ -42,7 +62,12 @@ const items = [
     desc: "AI drafts stronger headlines & CTAs you can adapt.",
     icon: (
       <svg viewBox="0 0 24 24" className="h-6 w-6">
-        <path d="M5 4h14v6H5zM5 14h8v6H5z" />
+        <path
+          d="M5 4h14v6H5zM5 14h8v6H5z"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+        />
       </svg>
     ),
   },
@@ -51,7 +76,12 @@ const items = [
     desc: "See position vs similar sites by vertical.",
     icon: (
       <svg viewBox="0 0 24 24" className="h-6 w-6">
-        <path d="M4 20V8m6 12V4m6 16v-6m4 6H2" />
+        <path
+          d="M4 20V8m6 12V4m6 16v-6m4 6H2"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+        />
       </svg>
     ),
   },

@@ -1,6 +1,6 @@
 import React from "react";
 
-/** Vienkārša iekšējā funkcija – lai nav atkarības no utiliem */
+/** Lokāla vērtējuma funkcija */
 function letterFromScore(score = 0) {
   if (score >= 90) return "A";
   if (score >= 80) return "B";
