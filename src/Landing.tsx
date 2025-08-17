@@ -4,20 +4,20 @@ import Features from "./components/Features";
 import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
 
-/** Props ko drīkst padot no App.tsx */
 type LandingProps = {
-  freeReport?: any; // ja vajadzēs barot ar realajiem datiem
-  onRunTest?: (url: string) => Promise<void> | void; // ārējais analizētājs (neobligāts)
+  freeReport?: any;
+  onRunTest?: (url: string) => Promise<void> | void;
   onOrderFull?: () => void;
   onSeeSample?: () => void;
 };
 
-/** Palīgfunkcija drošai % vizualizācijai */
 function safePct(n?: number) {
   if (typeof n === "number" && isFinite(n))
     return Math.max(0, Math.min(100, n));
   return 0;
 }
+
+const BLUR_TABS = new Set(["Findings", "Content Audit", "Copy Suggestions"]);
 
 export default function Landing({
   freeReport: _freeReport,
@@ -28,68 +28,254 @@ export default function Landing({
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("Overall");
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // DEMO vērtības (aizstāj ar reāliem datiem, kad būs)
-  const demoScore = 75;
-  const structurePct = 0;
-  const contentPct = 13;
+  // --- Demo skaitļi (aizstāj ar reāliem pēc vajadzības) ---
+  const demoScore = 73;
+  const structurePct = 76;
+  const contentPct = 70;
 
-  /** Iekšējais demo process (progress + scroll uz rezultātiem) */
-  const runTest = () => {
+  const sectionsPresent = [
+    { title: "hero", ok: true },
+    { title: "social proof", ok: true },
+    { title: "features", ok: true },
+    { title: "contact", ok: true },
+    { title: "value prop", ok: true },
+    { title: "pricing", ok: false },
+    { title: "faq", ok: true },
+    { title: "footer", ok: true },
+  ];
+
+  const quickWins = [
+    "Add testimonials to build credibility.",
+    "Improve navigation structure for ease of access.",
+    "Enhance FAQ section with clearer formatting.",
+  ];
+
+  const backlog = [
+    {
+      title: "Revise Hero Section Copy",
+      impact: "high",
+      effort: "2d",
+      uplift: "+20% leads",
+    },
+    {
+      title: "Integrate Testimonials",
+      impact: "med",
+      effort: "3d",
+      uplift: "+10% leads",
+    },
+    {
+      title: "Enhance FAQ Section",
+      impact: "med",
+      effort: "2d",
+      uplift: "+10% leads",
+    },
+    {
+      title: "Add Pricing Information",
+      impact: "low",
+      effort: "4d",
+      uplift: "+5% leads",
+    },
+    {
+      title: "Improve Navigation Flow",
+      impact: "high",
+      effort: "3d",
+      uplift: "+20% leads",
+    },
+  ];
+
+  // --- Demo “screenshot” (bilde vai placeholder) ---
+  const heroShot = "/report-1.png"; // ja tev repo saknē ir public/report-1.png (kā iepriekš), ceļš der
+  const shotExists = true;
+
+  // ---- helpers ----
+  const normalizeUrl = (u: string) =>
+    u.startsWith("http") ? u : `https://${u}`;
+
+  const runTestDemo = () => {
     if (!url.trim()) return;
     setLoading(true);
     setShowResults(false);
-
     const start = Date.now();
-    const duration = 5000; // 5s demo
+    const duration = 3000;
     const tick = () => {
       const p = Math.min(1, (Date.now() - start) / duration);
-      if (p < 1) {
-        requestAnimationFrame(tick);
-      } else {
+      if (p < 1) requestAnimationFrame(tick);
+      else {
         setLoading(false);
         setShowResults(true);
+        setActiveTab("Overall");
         setTimeout(() => {
           previewRef.current?.scrollIntoView({
             behavior: "smooth",
             block: "start",
           });
-        }, 100);
+        }, 120);
       }
     };
     requestAnimationFrame(tick);
   };
 
-  /** Vienmēr palaižam iekšējo demo + (ja ir) fonā ārējo analizētāju */
   const handleRun = () => {
     if (!url.trim()) return;
-
-    // 1) uzreiz parādam animāciju/rezultātu demā
-    runTest();
-
-    // 2) paralēli palaižam ārējo analizētāju (ja padots no App.tsx)
+    runTestDemo();
     if (onRunTest) {
       try {
-        Promise.resolve(onRunTest(normalizeUrl(url))).catch(() => {
-          /* klusām */
-        });
-      } catch {
-        /* klusām */
-      }
+        Promise.resolve(onRunTest(normalizeUrl(url))).catch(() => {});
+      } catch {}
     }
   };
 
-  const normalizeUrl = (u: string) =>
-    u.startsWith("http") ? u : `https://${u}`;
-
-  // Noklusētie ceļi pilnajam reportam / sample
   const orderFullInternal = () => {
     window.location.href = "/full";
   };
   const seeSampleInternal = () => {
     window.location.href = "/full?dev=1";
   };
+
+  // ---- Tab saturs ----
+  const TabButton = ({ name }: { name: string }) => (
+    <button
+      type="button"
+      onClick={() => setActiveTab(name)}
+      className={
+        "px-4 py-2 rounded-t-xl text-sm border " +
+        (activeTab === name
+          ? "bg-white border-slate-200 font-medium"
+          : "bg-slate-100/60 text-slate-700 border-transparent hover:bg-white")
+      }
+    >
+      {name}
+    </button>
+  );
+
+  const BlurPanel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <div className="relative">
+      <div className="pointer-events-none select-none blur-sm">{children}</div>
+      <div className="absolute inset-0 grid place-items-center">
+        <div className="rounded-xl bg-white/80 backdrop-blur border px-5 py-4 text-center shadow-sm">
+          <div className="text-sm text-slate-700">
+            Detailed view available in the Full Audit.
+          </div>
+          <button
+            onClick={onOrderFull ?? orderFullInternal}
+            className="mt-3 rounded-lg px-4 py-2 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+          >
+            Order Full Audit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const TabsArea = () => (
+    <div className="mt-6">
+      <div className="flex gap-2 pl-2">
+        {[
+          "Overall",
+          "Sections Present",
+          "Quick Wins",
+          "Prioritized Backlog",
+          "Findings",
+          "Content Audit",
+          "Copy Suggestions",
+        ].map((t) => (
+          <TabButton key={t} name={t} />
+        ))}
+      </div>
+
+      <div className="border border-t-0 rounded-b-xl bg-white p-4">
+        {/* OVERALL */}
+        {activeTab === "Overall" && (
+          <div className="text-slate-700">
+            {shotExists ? (
+              <div className="rounded-xl overflow-hidden border">
+                <img
+                  src={heroShot}
+                  alt="Hero snapshot"
+                  className="w-full h-auto block"
+                  loading="lazy"
+                />
+              </div>
+            ) : (
+              <div className="h-48 grid place-items-center text-slate-500">
+                Run a test to see your live preview here.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SECTIONS */}
+        {activeTab === "Sections Present" && (
+          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {sectionsPresent.map((s, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-2 rounded-lg border px-3 py-2"
+              >
+                <span
+                  className={
+                    "h-2 w-2 rounded-full " +
+                    (s.ok ? "bg-emerald-500" : "bg-rose-500")
+                  }
+                />
+                <span className="text-sm">{s.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* QUICK WINS */}
+        {activeTab === "Quick Wins" && (
+          <ul className="list-disc pl-5 space-y-1">
+            {quickWins.map((q, i) => (
+              <li key={i} className="text-slate-700">
+                {q}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* BACKLOG */}
+        {activeTab === "Prioritized Backlog" && (
+          <div className="grid md:grid-cols-2 gap-3">
+            {backlog.map((b, i) => (
+              <div key={i} className="rounded-xl border p-4">
+                <div className="font-medium">{b.title}</div>
+                <div className="mt-1 text-sm text-slate-600">
+                  Impact:{" "}
+                  <span
+                    className={
+                      b.impact === "high"
+                        ? "text-rose-600"
+                        : b.impact === "med"
+                        ? "text-amber-600"
+                        : "text-emerald-600"
+                    }
+                  >
+                    {b.impact}
+                  </span>{" "}
+                  • Effort: {b.effort} • Estimated:{" "}
+                  <span className="font-medium">{b.uplift}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* BLURRED TABS */}
+        {BLUR_TABS.has(activeTab) && (
+          <BlurPanel>
+            <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
+              {activeTab}
+            </div>
+          </BlurPanel>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -136,8 +322,6 @@ export default function Landing({
               The AI tool that instantly grades your landing pages and gives you
               an action plan to hold your team accountable.
             </p>
-
-            {/* URL input + poga kā forma → Enter vienmēr darbojas */}
             <form
               className="mt-5 flex gap-3"
               onSubmit={(e) => {
@@ -160,7 +344,6 @@ export default function Landing({
                 {loading ? "Running…" : "Run Free Test"}
               </button>
             </form>
-
             <div className="mt-3 flex flex-wrap items-center gap-4 text-white/80 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -181,7 +364,6 @@ export default function Landing({
             </div>
           </div>
 
-          {/* Hero preview panel (attēls/placeholder) */}
           <div className="bg-white/80 rounded-2xl p-6 shadow-xl">
             <div className="h-48 md:h-56 rounded-xl bg-slate-100 border grid place-items-center text-slate-500">
               Hero Preview Placeholder
@@ -225,9 +407,7 @@ export default function Landing({
                   <span className="text-xl font-semibold">
                     {demoScore} / 100
                   </span>
-                  <span className="ml-3 text-slate-500">
-                    Grade shown based on heuristics (demo).
-                  </span>
+                  <span className="ml-3 text-slate-500">Grade: C (demo)</span>
                 </div>
               </div>
 
@@ -262,10 +442,13 @@ export default function Landing({
                   </div>
                 </div>
                 <div className="mt-4 text-sm text-slate-600">
-                  If you fix the top 5 issues we estimate ≈ <b>+12% leads</b>.
+                  If you fix the top 5 issues we estimate ≈ <b>+18% leads</b>.
                 </div>
               </div>
             </div>
+
+            {/* TABI */}
+            <TabsArea />
 
             {/* Scorecard CTA */}
             <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
@@ -282,7 +465,6 @@ export default function Landing({
                 className="flex w-full flex-col sm:flex-row gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  // TODO: integrēt e-pasta nosūtīšanu
                 }}
               >
                 <input
@@ -344,7 +526,7 @@ export default function Landing({
         )}
       </section>
 
-      {/* Case study (saglabāts) */}
+      {/* Case study */}
       <section className="mx-auto max-w-[1200px] px-4 py-14">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 items-center">
           <div className="md:col-span-2">
@@ -353,9 +535,8 @@ export default function Landing({
               Agency's Work.
             </h3>
             <p className="mt-2 text-slate-600">
-              Before: CTA hidden below the fold, slow load times. After: CTA
-              above the fold, load time &lt; 2.0s. Result: more sign-ups and
-              lower CPA.
+              Before: CTA below the fold, slow load times. After: CTA above the
+              fold, load time &lt; 2.0s. Result: more sign-ups and lower CPA.
             </p>
             <blockquote className="mt-4 rounded-xl bg-slate-50 p-4 text-slate-700 text-sm">
               “I used to worry if I was wasting money, but the Holbox AI report
