@@ -78,6 +78,66 @@ export default function Landing({
   const seeSampleInternal = () => {
     window.location.href = "/full?dev=1";
   };
+// ...imports un state kā iepriekš
+
+// IEKŠĒJAIS DEMO "RUN" NEMAINĀS
+const runTest = () => {
+  if (!url.trim()) return;
+  setLoading(true);
+  setShowResults(false);
+
+  const start = Date.now();
+  const duration = 5000; // 5s demo
+  const tick = () => {
+    const p = Math.min(1, (Date.now() - start) / duration);
+    if (p < 1) {
+      requestAnimationFrame(tick);
+    } else {
+      setLoading(false);
+      setShowResults(true);
+      setTimeout(() => {
+        previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    }
+  };
+  requestAnimationFrame(tick);
+};
+
+// JAUNS handleRun — vienmēr startē iekšējo demo + fonā izsauc ārējo
+const handleRun = () => {
+  if (!url.trim()) return;
+
+  // 1) uzreiz parādam animāciju un preview (demo)
+  runTest();
+
+  // 2) ja App padod reālu analizētāju — palaižam fonā
+  if (onRunTest) {
+    try {
+      // negaidām, lai netraucē animācijai
+      Promise.resolve(onRunTest(url)).catch(() => {/* klusām */});
+    } catch {
+      /* klusām */
+    }
+  }
+};
+
+// ...JSX input laukam jau bija:
+<input
+  aria-label="Enter your website URL"
+  placeholder="Enter your website URL"
+  value={url}
+  onChange={(e) => setUrl(e.target.value)}
+  onKeyDown={(e) => e.key === "Enter" && handleRun()}  // Enter strādā
+  className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
+/>
+
+<button
+  onClick={handleRun}         // Klikšķis arī strādā
+  disabled={loading || !url.trim()}
+  className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
+>
+  {loading ? "Running…" : "Run Free Test"}
+</button>
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
