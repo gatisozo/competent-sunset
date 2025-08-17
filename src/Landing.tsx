@@ -1,132 +1,91 @@
-// src/Landing.tsx
-import React, { useMemo, useState } from "react";
-import heroUrl from "/hero.png";
-import { Tabs } from "./components/Tabs";
-import { GradeBadge } from "./components/GradeBadge";
-import { BlurPanel } from "./components/BlurPanel";
-import { MetricTile } from "./components/MetricTile";
-import { SmartShot } from "./components/SmartShot";
-import {
-  normalizeFreeReport,
-  letterFromScore,
-  topFindings,
-  estimateUpliftPct,
-  type FreeReportNormalized,
-  type Finding,
-  type BacklogItem,
-} from "./lib/grading";
+import React, { useRef, useState } from "react";
+import GradeBadge from "./components/GradeBadge";
+import Features from "./components/Features";
+import Counters from "./components/Counters";
+import ContactForm from "./components/ContactForm";
 
-type Props = {
-  freeReport?: any; // dati no /api/analyze (free)
-  onRunTest?: (url: string) => void;
-  onOrderFull?: () => void;
-  onSeeSample?: () => void;
-};
+/**
+ * Palīgfunkcijas drošam grading (ja nav utilu vai AI atbildes).
+ * Piezīme: ja tev ir normalizeFreeReport u.c., vari droši aizvietot šīs.
+ */
+function safePct(n?: number) {
+  if (typeof n === "number" && isFinite(n))
+    return Math.max(0, Math.min(100, n));
+  return 0;
+}
 
-const TABS = [
-  { id: "overall", label: "Overall" },
-  { id: "sections", label: "Sections Present" },
-  { id: "quickwins", label: "Quick Wins" },
-  { id: "backlog", label: "Prioritized Backlog" },
-  { id: "findings", label: "Findings" },
-  { id: "content", label: "Content Audit" },
-  { id: "copy", label: "Copy Suggestions" },
-];
-
-const DEFAULT_SECTIONS = [
-  "hero",
-  "value prop",
-  "social proof",
-  "features",
-  "pricing",
-  "faq",
-  "contact",
-  "footer",
-];
-
-export default function Landing({
-  freeReport,
-  onRunTest,
-  onOrderFull,
-  onSeeSample,
-}: Props) {
+export default function Landing() {
   const [url, setUrl] = useState("");
-  const [tab, setTab] = useState<string>("overall");
+  const [loading, setLoading] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // Normalize incoming report (safe)
-  const n: FreeReportNormalized | null = useMemo(() => {
-    try {
-      if (!freeReport) return null;
-      return normalizeFreeReport(freeReport);
-    } catch {
-      return null;
-    }
-  }, [freeReport]);
+  // DEMO rezultātu “score” — aizstāj ar reālo AI rezultātu no tavas analīzes
+  const demoScore = 75; // saglabāju kā tev bija
+  const structurePct = 0; // ja nav datu — 0, citādi ieliec reālo
+  const contentPct = 13;
 
-  // Map uz jaunajiem laukiem no grading utilīša
-  const structurePct = n?.structureScore ?? 76;
-  const contentPct = n?.contentScore ?? 70;
-  const score = n?.score ?? Math.round((structurePct + contentPct) / 2);
-  const headlineLetter = letterFromScore(score);
-
-  const uplift = n ? estimateUpliftPct(n.prioritized_backlog || []) : 18;
-  const top: Finding[] = n ? topFindings(n.findings || [], 5) : [];
-
-  // Sections present/missing no record -> masīvi
-  const presentSections: string[] = useMemo(() => {
-    if (!n) return [];
-    return Object.entries(n.sections_present || {})
-      .filter(([, v]) => !!v)
-      .map(([k]) => k);
-  }, [n]);
-
-  const missingSections: string[] = useMemo(() => {
-    if (!n) return DEFAULT_SECTIONS;
-    const presentSet = new Set(presentSections.map((s) => s.toLowerCase()));
-    return DEFAULT_SECTIONS.filter((s) => !presentSet.has(s.toLowerCase()));
-  }, [n, presentSections]);
-
-  const hasReport = !!n;
-
-  const rawUrl: string =
-    typeof freeReport?.url === "string" ? freeReport.url : "";
-
-  function run() {
+  const runTest = () => {
     if (!url.trim()) return;
-    onRunTest?.(url.startsWith("http") ? url : `https://${url}`);
-    // automātiski scroll uz rezultātiem
-    setTimeout(() => {
-      const el = document.getElementById("free-results");
-      el?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 150);
-  }
+    setLoading(true);
+    setShowResults(false);
+
+    // demo “progress”
+    const start = Date.now();
+    const duration = 5000;
+    const tick = () => {
+      const p = Math.min(1, (Date.now() - start) / duration);
+      if (p < 1) {
+        requestAnimationFrame(tick);
+      } else {
+        setLoading(false);
+        setShowResults(true);
+        setTimeout(
+          () =>
+            previewRef.current?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            }),
+          100
+        );
+      }
+    };
+    requestAnimationFrame(tick);
+  };
+
+  const handleSeeSample = () => {
+    window.location.href = "/full?dev=1";
+  };
+  const handleOrderFull = () => {
+    window.location.href = "/full";
+  };
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
       {/* NAV */}
       <header className="sticky top-0 z-20 backdrop-blur bg-white/70 border-b">
-        <div className="mx-auto max-w-[2030px] px-4 py-3 flex items-center justify-between">
+        <div className="mx-auto max-w-[1200px] px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-[#006D77]" />
             <span className="font-semibold tracking-tight">Holbox AI</span>
           </div>
           <nav className="hidden md:flex items-center gap-6 text-sm">
-            <a className="hover:opacity-80" href="#how">
-              How it works
-            </a>
             <a className="hover:opacity-80" href="#preview">
               Preview
             </a>
-            <a className="hover:opacity-80" href="#pricing">
-              Pricing
+            <a className="hover:opacity-80" href="#features">
+              Features
             </a>
             <a className="hover:opacity-80" href="#faq">
               FAQ
             </a>
+            <a className="hover:opacity-80" href="#contact">
+              Contact
+            </a>
           </nav>
           <button
-            onClick={run}
-            className="rounded-xl px-4 py-2 text-white bg-[#005a62] hover:brightness-110"
+            onClick={runTest}
+            className="rounded-xl px-4 py-2 text-white bg-[#006D77] hover:opacity-90"
           >
             Run Free Test
           </button>
@@ -136,7 +95,7 @@ export default function Landing({
       {/* HERO */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] to-[#83C5BE]" />
-        <div className="relative mx-auto max-w-[2030px] px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 md:gap-12 items-center">
+        <div className="relative mx-auto max-w-[1200px] px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 items-center">
           <div className="text-white">
             <h1 className="text-3xl md:text-5xl font-bold leading-tight">
               Get a Second Opinion on Your Website.
@@ -145,25 +104,31 @@ export default function Landing({
               The AI tool that instantly grades your landing pages and gives you
               an action plan to hold your team accountable.
             </p>
-            <div className="mt-4 md:mt-6 flex flex-col sm:flex-row gap-3">
+            <div className="mt-5 flex gap-3">
               <input
                 aria-label="Enter your website URL"
                 placeholder="Enter your website URL"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && runTest()}
                 className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
               />
               <button
-                onClick={run}
-                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+                onClick={runTest}
+                disabled={loading || !url.trim()}
+                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
               >
-                Run Free Test
+                {loading ? "Running…" : "Run Free Test"}
               </button>
             </div>
-            <div className="mt-3 md:mt-4 flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm">
+            <div className="mt-3 flex flex-wrap items-center gap-4 text-white/80 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
                 No sign-up needed
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-white/80" />
+                No credit card required
               </div>
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -175,354 +140,256 @@ export default function Landing({
               </div>
             </div>
           </div>
-          <div className="bg-white/90 rounded-2xl p-5 md:p-6 shadow-xl">
-            <img
-              src={heroUrl}
-              className="w-full h-auto rounded-xl border"
-              alt="Hero illustration"
-            />
+
+          {/* Hero labā puse – placeholder (šobrīd attēls) */}
+          <div className="bg-white/80 rounded-2xl p-6 shadow-xl">
+            <div className="h-48 md:h-56 rounded-xl bg-slate-100 border grid place-items-center text-slate-500">
+              Hero Preview Placeholder
+            </div>
             <p className="mt-3 text-slate-700 text-sm">
-              This panel will show the analysis progress animation (scanning →
-              parsing → grading → preview).
+              This panel shows the audit state (placeholder → analyzing →
+              complete).
             </p>
           </div>
         </div>
       </section>
 
-      {/* FREE REPORT RESULTS */}
+      {/* PREVIEW / FREE REPORT CARDS */}
       <section
-        id="free-results"
-        className="mx-auto max-w-[2030px] px-4 py-10 md:py-16"
+        id="preview"
+        ref={previewRef}
+        className="mx-auto max-w-[1200px] px-3 md:px-4 py-10 md:py-14"
       >
-        <h2 className="text-2xl md:text-3xl font-semibold">
-          Your Website Summary
-        </h2>
-        <p className="mt-1 text-slate-600">
-          AI-generated grade and top blockers.
-        </p>
-
-        <div className="mt-6 grid lg:grid-cols-3 gap-6 md:gap-8">
-          <div className="lg:col-span-1 grid gap-6">
-            <GradeBadge score={score} />
-
-            <div className="rounded-2xl border bg-white p-4">
-              <div className="text-sm text-slate-500">Sub-scores</div>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <ScorePill label="Structure" pct={structurePct} />
-                <ScorePill label="Content" pct={contentPct} />
-              </div>
-              <div className="mt-3 text-sm text-slate-600">
-                Grade: <b>{headlineLetter}</b>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border bg-white p-4">
-              <div className="text-sm text-slate-500">
-                If you fix the top 5 issues
-              </div>
-              <div className="mt-2 text-lg font-semibold">
-                ≈ +{uplift}% leads
-              </div>
-              <div className="text-xs text-slate-500">
-                Estimate based on heuristics & past benchmarks.
-              </div>
-            </div>
+        {!showResults ? (
+          <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
+            Run a test to see your live preview here.
           </div>
-
-          <div className="lg:col-span-2">
-            <Tabs tabs={TABS} value={tab} onChange={setTab} />
-            <div className="rounded-b-2xl border border-t-0 bg-white p-4 md:p-6">
-              {!hasReport && (
-                <div className="text-sm text-slate-600">
-                  Run a test to see your live preview here.
+        ) : (
+          <>
+            {/* Grade — jauna vizualizācija */}
+            <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
+              <div className="rounded-2xl border bg-white p-5 md:p-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl md:text-2xl font-semibold">
+                    Your Website’s Grade
+                  </h2>
+                  <GradeBadge score={demoScore} size="lg" />
                 </div>
-              )}
-
-              {hasReport && tab === "overall" && n && (
-                <div className="grid md:grid-cols-2 gap-6">
-                  <SmartShot url={rawUrl} className="min-h-[260px]" />
-                  <div className="grid gap-3">
-                    <div className="font-medium">Top Issues</div>
-                    <ul className="space-y-3">
-                      {top.length ? (
-                        top.map((f: Finding, i: number) => (
-                          <li key={i} className="rounded-xl border p-3">
-                            <div className="flex items-center gap-2">
-                              <SeverityDot level={f.impact || "medium"} />
-                              <div className="font-medium">
-                                {f.title || "Issue"}
-                              </div>
-                            </div>
-                            {f.recommendation && (
-                              <div className="mt-1 text-sm text-slate-600">
-                                {f.recommendation}
-                              </div>
-                            )}
-                          </li>
-                        ))
-                      ) : (
-                        <li className="text-sm text-slate-600">
-                          No issues detected in the preview.
-                        </li>
-                      )}
-                    </ul>
-                  </div>
+                <div className="mt-4 h-3 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className="h-full bg-[#006D77]"
+                    style={{ width: `${demoScore}%` }}
+                  />
                 </div>
-              )}
-
-              {hasReport && tab === "sections" && n && (
-                <div className="grid md:grid-cols-2 gap-6">
-                  <SectionList title="Present" items={presentSections} ok />
-                  <SectionList title="Missing" items={missingSections} />
+                <div className="mt-3 text-slate-700">
+                  <span className="text-xl font-semibold">
+                    {demoScore} / 100
+                  </span>
+                  <span className="ml-3 text-slate-500">
+                    Grade shown based on heuristics (demo).
+                  </span>
                 </div>
-              )}
+              </div>
 
-              {hasReport && tab === "quickwins" && n && (
-                <div className="grid gap-3">
-                  {(n.quick_wins || []).length ? (
-                    (n.quick_wins || []).map((w: string, i: number) => (
+              <div className="rounded-2xl border bg-white p-5 md:p-6">
+                <div className="text-sm font-medium text-slate-700">
+                  Sub-scores
+                </div>
+                <div className="grid grid-cols-1 gap-4 mt-3">
+                  <div>
+                    <div className="text-sm text-slate-600">Structure</div>
+                    <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
                       <div
-                        key={i}
-                        className="rounded-xl border p-3 flex items-center justify-between"
-                      >
-                        <div className="text-sm">{w}</div>
-                        <div className="text-sm font-medium text-emerald-700">
-                          ≈ +2% leads
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-slate-600">
-                      No quick wins detected.
+                        className="h-full bg-[#99D6D0]"
+                        style={{ width: `${safePct(structurePct)}%` }}
+                      />
                     </div>
-                  )}
-                  <div className="mt-2 text-sm text-emerald-700 font-medium">
-                    All done: ≈ +{uplift}% leads
+                    <div className="text-xs text-slate-500 mt-1">
+                      {safePct(structurePct)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-slate-600">Content</div>
+                    <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
+                      <div
+                        className="h-full bg-[#006D77]"
+                        style={{ width: `${safePct(contentPct)}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {safePct(contentPct)}%
+                    </div>
                   </div>
                 </div>
-              )}
-
-              {hasReport && tab === "backlog" && n && (
-                <div className="grid gap-3">
-                  {(n.prioritized_backlog || []).length ? (
-                    (n.prioritized_backlog || []).map(
-                      (
-                        b: BacklogItem & { note?: string; uplift_pct?: number },
-                        i: number
-                      ) => (
-                        <div key={i} className="rounded-xl border p-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="font-medium">{b.title}</div>
-                            <div className="flex gap-2 text-xs">
-                              <Chip>{`Impact: ${b.impact || "high"}`}</Chip>
-                              {typeof (b as any).effort_days === "number" && (
-                                <Chip>{`Effort: ${
-                                  (b as any).effort_days
-                                }d`}</Chip>
-                              )}
-                              {typeof (b as any).uplift_pct === "number" && (
-                                <Chip className="bg-emerald-50 text-emerald-700 border-emerald-200">
-                                  ≈ +{(b as any).uplift_pct}% leads
-                                </Chip>
-                              )}
-                            </div>
-                          </div>
-                          {(b as any).note && (
-                            <div className="mt-1 text-sm text-slate-600">
-                              {(b as any).note}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    )
-                  ) : (
-                    <div className="text-sm text-slate-600">
-                      No prioritized backlog yet.
-                    </div>
-                  )}
+                <div className="mt-4 text-sm text-slate-600">
+                  If you fix the top 5 issues we estimate ≈ <b>+12% leads</b>.
                 </div>
-              )}
-
-              {hasReport && tab === "findings" && (
-                <BlurPanel
-                  title="Unlock all findings with annotated screenshots"
-                  onOrder={() => onOrderFull?.()}
-                  onSample={() => onSeeSample?.()}
-                />
-              )}
-
-              {hasReport && tab === "content" && (
-                <BlurPanel
-                  title="See full Content Audit and quality scores per section"
-                  onOrder={() => onOrderFull?.()}
-                  onSample={() => onSeeSample?.()}
-                />
-              )}
-
-              {hasReport && tab === "copy" && (
-                <BlurPanel
-                  title="Get rewritten headlines, subheads and CTAs tailored to your page"
-                  onOrder={() => onOrderFull?.()}
-                  onSample={() => onSeeSample?.()}
-                />
-              )}
+              </div>
             </div>
-          </div>
-        </div>
+
+            {/* Scorecard CTA (paliek kā bija) */}
+            <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
+              <div>
+                <h3 className="text-xl md:text-2xl font-semibold">
+                  Get a Free Scorecard for Your Website.
+                </h3>
+                <p className="mt-2 text-slate-600">
+                  Download a report with your website’s top 3 weaknesses and a
+                  few quick fixes. No credit card, no spam.
+                </p>
+              </div>
+              <form className="flex w-full flex-col sm:flex-row gap-3">
+                <input
+                  placeholder="Enter your email"
+                  className="flex-1 rounded-xl px-4 py-3 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
+                />
+                <button className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90">
+                  Get My Free Scorecard
+                </button>
+              </form>
+            </div>
+
+            {/* Full audit piedāvājums (paliek) */}
+            <section className="mt-12 rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
+              <div>
+                <h3 className="text-2xl md:text-3xl font-semibold">
+                  Full AI Report in 1–2 Minutes — Just $50
+                </h3>
+                <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
+                  <li>
+                    • A Complete Check-up: We review over 40 critical points in
+                    UX, SEO, CRO, and performance.
+                  </li>
+                  <li>• Full annotated screenshots</li>
+                  <li>
+                    • Actionable To-Do List: A prioritized list of fixes you can
+                    hand directly to your team or freelancer.
+                  </li>
+                  <li>• PDF + online report (shareable link)</li>
+                </ul>
+                <div className="mt-6 flex gap-3">
+                  <button
+                    onClick={handleOrderFull}
+                    className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+                  >
+                    Order Full Audit
+                  </button>
+                  <button
+                    onClick={handleSeeSample}
+                    className="rounded-xl px-5 py-3 border font-medium hover:bg-slate-50"
+                  >
+                    See Sample Report
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-3">
+                <div className="h-40 md:h-44 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
+                  Report preview placeholder
+                </div>
+                <div className="h-16 md:h-20 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
+                  Metrics / badges
+                </div>
+              </div>
+            </section>
+          </>
+        )}
       </section>
 
-      {/* BENEFITS (before / after, īss) */}
-      <section className="mx-auto max-w-[2030px] px-4 py-12 md:py-16">
-        <div className="rounded-3xl border bg-white p-5 md:p-10">
-          <h3 className="text-2xl font-semibold">
-            How Holbox AI Gave This Business Owner Confidence in Their Agency’s
-            Work.
-          </h3>
-          <p className="mt-2 text-slate-600">
-            Before: CTA hidden below the fold, slow load times. After: CTA above
-            the fold, load time &lt; 2.0s.
-          </p>
-          <blockquote className="mt-4 rounded-xl border bg-slate-50 p-4 text-slate-700">
-            “I used to worry if I was wasting money, but the Holbox AI report
-            gave me a clear list of improvements to request. Now I know I’m
-            getting a great return.”
-          </blockquote>
+      {/* BENEFITS (tavs before/after bloks paliek netraucēts) */}
+      <section className="mx-auto max-w-[1200px] px-4 py-14">
+        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 items-center">
+          <div className="md:col-span-2">
+            <h3 className="text-2xl font-semibold">
+              How Holbox AI Gave This Business Owner Confidence in Their
+              Agency's Work.
+            </h3>
+            <p className="mt-2 text-slate-600">
+              Before: CTA hidden below the fold, slow load times. After: CTA
+              above the fold, load time &lt; 2.0s. Result: more sign-ups and
+              lower CPA.
+            </p>
+            <blockquote className="mt-4 rounded-xl bg-slate-50 p-4 text-slate-700 text-sm">
+              “I used to worry if I was wasting money, but the Holbox AI report
+              gave me a clear list of improvements to request. Now I know I'm
+              getting a great return.”
+            </blockquote>
+          </div>
+          <div className="h-32 md:h-40 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
+            Before/After chart
+          </div>
         </div>
       </section>
 
       {/* FEATURES */}
-      <section className="mx-auto max-w-[2030px] px-4 py-12 md:py-16">
-        <h3 className="text-2xl font-semibold mb-6">What You Get</h3>
-        <div className="grid md:grid-cols-3 gap-4">
+      <div id="features">
+        <Features onPrimaryClick={runTest} />
+      </div>
+
+      {/* FAQ + CTA */}
+      <section id="faq" className="mx-auto max-w-[1200px] px-4 py-14">
+        <h3 className="text-2xl font-semibold">FAQ</h3>
+        <div className="mt-6 grid md:grid-cols-2 gap-6">
           {[
             [
-              "40+ UX/SEO/CRO checks",
-              "Each audit scans layout, clarity and performance cues.",
+              "Does AI make mistakes?",
+              "The analysis is based on standards and heuristics; a human review is still possible.",
             ],
-            ["Annotated screenshots", "We mark exactly where & why to fix."],
             [
-              "Prioritized To-Do list",
-              "Impact vs Effort; hand straight to dev or freelancer.",
+              "Do you need server access?",
+              "No, the audit runs on publicly available content only.",
             ],
-            ["Quick Wins", "3–5 changes you can do today."],
-            ["Copy suggestions", "Stronger headlines and CTAs ready to adapt."],
-            ["Benchmarks", "See position vs similar sites in your vertical."],
-          ].map(([h, d], i: number) => (
+            [
+              "Are my data secure?",
+              "Reports are deleted after 14 days unless permanent access is purchased.",
+            ],
+            [
+              "Which pages are scanned?",
+              "Key pages like home, product/service, and forms/checkout (configurable).",
+            ],
+            [
+              "Can I use this to evaluate the work of my marketing team or agency?",
+              "Yes. Many of our customers use Holbox AI to get an unbiased report on a new website or landing page. It's the fastest way to get a second opinion and ensure you're getting a great return.",
+            ],
+          ].map((qa, i) => (
             <div key={i} className="rounded-2xl border bg-white p-5">
-              <div className="font-medium">{h}</div>
-              <div className="mt-1 text-sm text-slate-600">{d}</div>
+              <div className="font-medium">{qa[0]}</div>
+              <p className="mt-1 text-slate-600 text-sm">{qa[1]}</p>
             </div>
           ))}
         </div>
+        <div className="mt-6">
+          <button
+            onClick={runTest}
+            className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
+          >
+            Still have questions? Get a Free Scorecard
+          </button>
+        </div>
       </section>
+
+      {/* CONTACT */}
+      <ContactForm />
 
       {/* COUNTERS */}
-      <section className="mx-auto max-w-[2030px] px-4 pb-12 md:pb-16">
-        <div className="grid md:grid-cols-4 gap-4">
-          <MetricTile label="Websites analyzed" value={1200} />
-          <MetricTile label="Full reports delivered" value={600} />
-          <MetricTile label="Median uplift (top 5 fixes)" value={18} />
-          <MetricTile label="Audit checks run" value={10000} />
-        </div>
-      </section>
+      <Counters />
 
-      {/* SCORECARD CTA */}
-      <section className="mx-auto max-w-[2030px] px-4 pb-12 md:pb-16">
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
-          <div>
-            <h3 className="text-xl md:text-2xl font-semibold">
-              Get a Free Scorecard for Your Website.
-            </h3>
-            <p className="mt-2 text-slate-600">
-              Download a report with your website’s top 3 weaknesses and a few
-              quick fixes. No credit card, no spam.
-            </p>
+      {/* FOOTER */}
+      <footer className="border-t">
+        <div className="mx-auto max-w-[1200px] px-4 py-8 flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-slate-600">
+          <div className="flex items-center gap-2">
+            <div className="h-6 w-6 rounded-md bg-[#006D77]" />
+            <span>Holbox AI</span>
           </div>
-          <div className="grid grid-cols-[1fr_auto] gap-3">
-            <input
-              className="rounded-xl px-4 py-3 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
-              placeholder="Enter your email"
-            />
-            <button className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:brightness-110">
-              Get My Free Scorecard
-            </button>
+          <div className="flex gap-6">
+            <a href="#">Pricing</a>
+            <a href="#faq">FAQ</a>
+            <a href="#contact">Contact</a>
+            <a href="#">Privacy</a>
+            <a href="#">Terms</a>
           </div>
+          <div>Made with ❤️ in Latvia • © {new Date().getFullYear()}</div>
         </div>
-      </section>
+      </footer>
     </div>
   );
 }
-
-/* — helpers (iekšējie komponenti) jaa— */
-
-function ScorePill({ label, pct }: { label: string; pct: number }) {
-  return (
-    <div className="rounded-xl border p-3">
-      <div className="text-sm">{label}</div>
-      <div className="mt-2 h-2 rounded bg-slate-200 overflow-hidden">
-        <div
-          className="h-full bg-[#006D77]"
-          style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
-        />
-      </div>
-      <div className="mt-1 text-xs text-slate-600">{Math.round(pct)}%</div>
-    </div>
-  );
-}
-
-function SeverityDot({ level }: { level: "high" | "medium" | "low" }) {
-  const c =
-    level === "high"
-      ? "bg-red-500"
-      : level === "medium"
-      ? "bg-amber-500"
-      : "bg-emerald-500";
-  return <span className={`h-2.5 w-2.5 rounded-full ${c}`} />;
-}
-
-function SectionList({
-  title,
-  items,
-  ok,
-}: {
-  title: string;
-  items: string[];
-  ok?: boolean;
-}) {
-  return (
-    <div className="rounded-2xl border bg-white p-4">
-      <div className="font-medium">{title}</div>
-      <ul className="mt-2 grid grid-cols-2 gap-2 text-sm">
-        {items.length ? (
-          items.map((s: string, i: number) => (
-            <li key={i} className="flex items-center gap-2">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  ok ? "bg-emerald-500" : "bg-red-500"
-                }`}
-              />
-              {s}
-            </li>
-          ))
-        ) : (
-          <li className="text-slate-500">—</li>
-        )}
-      </ul>
-    </div>
-  );
-}
-
-function Chip({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <span className={`px-2 py-0.5 rounded border bg-slate-50 ${className}`}>
-      {children}
-    </span>
-  );
-}
- 
