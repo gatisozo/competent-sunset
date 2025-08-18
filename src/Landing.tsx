@@ -31,8 +31,10 @@ export default function Landing({
 }: LandingProps) {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [showResults, setShowResults] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("Overall");
+  const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   // --- Demo skaitļi (mock; aizstāj ar reālajiem, ja pieslēdz API) ---
@@ -51,14 +53,14 @@ export default function Landing({
     { title: "footer", ok: true },
   ];
 
-  // === Quick Wins ar % ieguvumu (JAUNS) ===
+  // Quick Wins ar % ieguvumu (badge)
   const quickWins: { text: string; upliftPct: number }[] = [
     { text: "Add testimonials to build credibility.", upliftPct: 6 },
     { text: "Improve navigation structure for ease of access.", upliftPct: 4 },
     { text: "Enhance FAQ section with clearer formatting.", upliftPct: 3 },
   ];
 
-  // Prioritized backlog ar already uplift; akcentēts badge renderī
+  // Prioritized backlog ar % badge
   const backlog = [
     {
       title: "Revise Hero Section Copy",
@@ -99,19 +101,30 @@ export default function Landing({
   const normalizeUrl = (u: string) =>
     u.startsWith("http") ? u : `https://${u}`;
 
+  // ===== RUN TEST + animētais progress =====
   const runTestDemo = () => {
     if (!url.trim()) return;
-    setLoading(true);
+    const normalized = normalizeUrl(url.trim());
+    setLastTestedUrl(normalized);
+
+    // reset stāvokļi
+    setActiveTab("Overall");
     setShowResults(false);
+    setLoading(true);
+    setProgress(0);
+
+    // demo ilgums
+    const duration = 12000; // 12s demo; vari brīvi mainīt
     const start = Date.now();
-    const duration = 3000;
+
     const tick = () => {
       const p = Math.min(1, (Date.now() - start) / duration);
-      if (p < 1) requestAnimationFrame(tick);
-      else {
+      setProgress(Math.round(p * 100));
+      if (p < 1) {
+        requestAnimationFrame(tick);
+      } else {
         setLoading(false);
         setShowResults(true);
-        setActiveTab("Overall");
         setTimeout(() => {
           previewRef.current?.scrollIntoView({
             behavior: "smooth",
@@ -121,11 +134,8 @@ export default function Landing({
       }
     };
     requestAnimationFrame(tick);
-  };
 
-  const handleRun = () => {
-    if (!url.trim()) return;
-    runTestDemo();
+    // opc. callback
     if (onRunTest) {
       try {
         Promise.resolve(onRunTest(normalizeUrl(url))).catch(() => {});
@@ -133,18 +143,27 @@ export default function Landing({
     }
   };
 
-  // === DEV workflow → uzreiz uz Full report ar dev=1 & url ===
+  const handleRun = () => {
+    if (!url.trim()) return;
+    runTestDemo();
+  };
+
+  // === DEV workflow → uzreiz uz Full report ar dev=1 & pēdējo testēto URL ===
+  const resolvedAuditUrl =
+    lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
   const orderFullInternal = () => {
     const href = DEV_MODE
       ? `/full?dev=1${
-          url ? `&url=${encodeURIComponent(normalizeUrl(url))}` : ""
+          resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
         }`
-      : `/full`;
+      : `/full${
+          resolvedAuditUrl ? `?url=${encodeURIComponent(resolvedAuditUrl)}` : ""
+        }`;
     window.location.href = href;
   };
   const seeSampleInternal = () => {
     const href = `/full?dev=1${
-      url ? `&url=${encodeURIComponent(normalizeUrl(url))}` : ""
+      resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
     }`;
     window.location.href = href;
   };
@@ -204,7 +223,24 @@ export default function Landing({
         {/* OVERALL */}
         {activeTab === "Overall" && (
           <div className="text-slate-700">
-            {shotExists ? (
+            {loading ? (
+              // === Animētais status bar, kamēr ģenerējas ===
+              <div className="rounded-xl border bg-white p-5">
+                <div className="text-slate-700 font-medium">
+                  Analyzing your site…
+                </div>
+                <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className="h-full bg-[#006D77] transition-all"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <div className="mt-2 text-sm text-slate-600">
+                  Progress: {progress}% • Estimated time: ~
+                  {Math.max(1, Math.ceil((100 - progress) / 8))}s
+                </div>
+              </div>
+            ) : shotExists ? (
               <div className="rounded-xl overflow-hidden border">
                 <img
                   src={heroShot}
@@ -241,7 +277,7 @@ export default function Landing({
           </div>
         )}
 
-        {/* QUICK WINS — ar % badge (JAUNS) */}
+        {/* QUICK WINS — ar % badge */}
         {activeTab === "Quick Wins" && (
           <ul className="space-y-2">
             {quickWins.map((q, i) => (
@@ -390,13 +426,21 @@ export default function Landing({
             </div>
           </div>
 
+          {/* HERO preview: VIDEO */}
           <div className="bg-white/80 rounded-2xl p-6 shadow-xl">
-            <div className="h-48 md:h-56 rounded-xl bg-slate-100 border grid place-items-center text-slate-500">
-              Hero Preview Placeholder
+            <div className="rounded-xl overflow-hidden border">
+              <video
+                src="/hero.mp4"
+                className="w-full h-48 md:h-56 object-cover"
+                autoPlay
+                muted
+                loop
+                playsInline
+              />
             </div>
             <p className="mt-3 text-slate-700 text-sm">
-              This panel shows the audit state (placeholder → analyzing →
-              complete).
+              This panel shows the current state of the audit (placeholder →
+              analyzing → complete).
             </p>
           </div>
         </div>
@@ -410,6 +454,7 @@ export default function Landing({
       >
         {!showResults ? (
           <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
+            {/* Ja nav palaists tests – aicinājums */}
             Run a test to see your live preview here.
           </div>
         ) : (
@@ -505,52 +550,68 @@ export default function Landing({
                 </button>
               </form>
             </div>
-
-            {/* Full Audit piedāvājums */}
-            <section className="mt-12 rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
-              <div>
-                <h3 className="text-2xl md:text-3xl font-semibold">
-                  Full AI Report in 1–2 Minutes — Just $50
-                </h3>
-                <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
-                  <li>
-                    • A Complete Check-up: We review over 40 critical points in
-                    UX, SEO, CRO, and performance.
-                  </li>
-                  <li>• Full annotated screenshots</li>
-                  <li>
-                    • Actionable To-Do List: A prioritized list of fixes you can
-                    hand directly to your team or freelancer.
-                  </li>
-                  <li>• PDF + online report (shareable link)</li>
-                </ul>
-                <div className="mt-6 flex gap-3">
-                  <button
-                    onClick={onOrderFull ?? orderFullInternal}
-                    className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
-                  >
-                    Order Full Audit
-                  </button>
-                  <button
-                    onClick={onSeeSample ?? seeSampleInternal}
-                    className="rounded-xl px-5 py-3 border font-medium hover:bg-slate-50"
-                  >
-                    See Sample Report
-                  </button>
-                </div>
-              </div>
-              <div className="grid gap-3">
-                <div className="h-40 md:h-44 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
-                  Report preview placeholder
-                </div>
-                <div className="h-16 md:h-20 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
-                  Metrics / badges
-                </div>
-              </div>
-            </section>
           </>
         )}
       </section>
+
+      {/* FEATURES */}
+      <div id="features">
+        <Features onPrimaryClick={handleRun} />
+      </div>
+
+      {/* FULL REPORT bloks (zem Features) ar hero.png + badges.png vienā rindā */}
+      <section className="mx-auto max-w-[1200px] px-4 py-12">
+        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
+          <div>
+            <h3 className="text-2xl md:text-3xl font-semibold">
+              Full AI Report in 1–2 Minutes — Just $50
+            </h3>
+            <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
+              <li>
+                • A Complete Check-up: We review over 40 critical points in UX,
+                SEO, CRO, and performance.
+              </li>
+              <li>• Full annotated screenshots</li>
+              <li>
+                • Actionable To-Do List: A prioritized list of fixes you can
+                hand directly to your team or freelancer.
+              </li>
+              <li>• PDF + online report (shareable link)</li>
+            </ul>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={onOrderFull ?? orderFullInternal}
+                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+              >
+                Order Full Audit
+              </button>
+              <button
+                onClick={onSeeSample ?? seeSampleInternal}
+                className="rounded-xl px-5 py-3 border font-medium hover:bg-slate-50"
+              >
+                See Sample Report
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-3">
+            <img
+              src="/hero.png"
+              alt="Report preview"
+              className="w-full rounded-2xl border"
+              loading="lazy"
+            />
+            <img
+              src="/badges.png"
+              alt="Badges"
+              className="w-full rounded-2xl border"
+              loading="lazy"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* COUNTERS PĀRCELTI AUGŠUP */}
+      <Counters />
 
       {/* Case study */}
       <section className="mx-auto max-w-[1200px] px-4 py-14">
@@ -570,16 +631,16 @@ export default function Landing({
               getting a great return.”
             </blockquote>
           </div>
-          <div className="h-32 md:h-40 rounded-2xl border bg-slate-50 grid place-items-center text-slate-500">
-            Before/After chart
+          <div className="rounded-2xl border overflow-hidden">
+            <img
+              src="/before-after.png"
+              alt="Before / After chart"
+              className="w-full h-auto"
+              loading="lazy"
+            />
           </div>
         </div>
       </section>
-
-      {/* FEATURES */}
-      <div id="features">
-        <Features onPrimaryClick={handleRun} />
-      </div>
 
       {/* FAQ + CTA */}
       <section id="faq" className="mx-auto max-w-[1200px] px-4 py-14">
@@ -624,10 +685,9 @@ export default function Landing({
       </section>
 
       {/* CONTACT */}
-      <ContactForm />
-
-      {/* COUNTERS */}
-      <Counters />
+      <div id="contact">
+        <ContactForm />
+      </div>
 
       {/* FOOTER */}
       <footer className="border-t">
