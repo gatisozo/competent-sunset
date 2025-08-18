@@ -12,14 +12,16 @@ type LandingProps = {
 };
 
 function safePct(n?: number) {
-  if (typeof n === "number" && isFinite(n)) return Math.max(0, Math.min(100, n));
+  if (typeof n === "number" && isFinite(n))
+    return Math.max(0, Math.min(100, n));
   return 0;
 }
 
 const BLUR_TABS = new Set(["Findings", "Content Audit", "Copy Suggestions"]);
 const DEV_MODE =
   (typeof import.meta !== "undefined" && (import.meta as any).env?.DEV) ||
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_DEV_MODE === "1");
+  (typeof import.meta !== "undefined" &&
+    (import.meta as any).env?.VITE_DEV_MODE === "1");
 
 export default function Landing({
   freeReport: _freeReport,
@@ -35,7 +37,7 @@ export default function Landing({
   const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // --- Demo skaitļi (mock) ---
+  // --- Demo dati (mock; aizstāj ar reāliem, ja nepieciešams) ---
   const demoScore = 73;
   const structurePct = 76;
   const contentPct = 70;
@@ -51,26 +53,52 @@ export default function Landing({
     { title: "footer", ok: true },
   ];
 
-  // Quick Wins ar % ieguvumu
+  // Quick Wins ar % ieguvumiem
   const quickWins: { text: string; upliftPct: number }[] = [
     { text: "Add testimonials to build credibility.", upliftPct: 6 },
     { text: "Improve navigation structure for ease of access.", upliftPct: 4 },
     { text: "Enhance FAQ section with clearer formatting.", upliftPct: 3 },
   ];
 
-  // Prioritized backlog ar % ieguvumu
+  // Prioritized backlog ar % ieguvumiem
   const backlog = [
-    { title: "Revise Hero Section Copy", impact: "high", effort: "2d", upliftPct: 20 },
-    { title: "Integrate Testimonials", impact: "med", effort: "3d", upliftPct: 10 },
-    { title: "Enhance FAQ Section", impact: "med", effort: "2d", upliftPct: 10 },
-    { title: "Add Pricing Information", impact: "low", effort: "4d", upliftPct: 5 },
-    { title: "Improve Navigation Flow", impact: "high", effort: "3d", upliftPct: 20 },
+    {
+      title: "Revise Hero Section Copy",
+      impact: "high",
+      effort: "2d",
+      upliftPct: 20,
+    },
+    {
+      title: "Integrate Testimonials",
+      impact: "med",
+      effort: "3d",
+      upliftPct: 10,
+    },
+    {
+      title: "Enhance FAQ Section",
+      impact: "med",
+      effort: "2d",
+      upliftPct: 10,
+    },
+    {
+      title: "Add Pricing Information",
+      impact: "low",
+      effort: "4d",
+      upliftPct: 5,
+    },
+    {
+      title: "Improve Navigation Flow",
+      impact: "high",
+      effort: "3d",
+      upliftPct: 20,
+    },
   ];
 
   const heroShot = "/report-1.png";
   const shotExists = true;
 
-  const normalizeUrl = (u: string) => (u.startsWith("http") ? u : `https://${u}`);
+  const normalizeUrl = (u: string) =>
+    u.startsWith("http") ? u : `https://${u}`;
 
   // ===== RUN TEST + animētais progress =====
   const runTestDemo = () => {
@@ -97,7 +125,10 @@ export default function Landing({
         setLoading(false);
         setShowResults(true);
         setTimeout(() => {
-          previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          previewRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
         }, 120);
       }
     };
@@ -116,16 +147,19 @@ export default function Landing({
     runTestDemo();
   };
 
-  // === DEV workflow → Full report ar autostartu ===
-  const resolvedAuditUrl = lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
+  // === DEV workflow → Full report ar autostartu un pēdējo testēto URL ===
+  const resolvedAuditUrl =
+    lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
   const orderFullInternal = () => {
-    const href = `/full?autostart=1${resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""}${
-      DEV_MODE ? "&dev=1" : ""
-    }`;
+    const href = `/full?autostart=1${
+      resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
+    }${DEV_MODE ? "&dev=1" : ""}`;
     window.location.href = href;
   };
   const seeSampleInternal = () => {
-    const href = `/full?dev=1${resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""}`;
+    const href = `/full?dev=1${
+      resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
+    }`;
     window.location.href = href;
   };
 
@@ -150,7 +184,9 @@ export default function Landing({
       <div className="pointer-events-none select-none blur-sm">{children}</div>
       <div className="absolute inset-0 grid place-items-center">
         <div className="rounded-xl bg-white/80 backdrop-blur border px-5 py-4 text-center shadow-sm">
-          <div className="text-sm text-slate-700">Detailed view available in the Full Audit.</div>
+          <div className="text-sm text-slate-700">
+            Detailed view available in the Full Audit.
+          </div>
           <button
             onClick={onOrderFull ?? orderFullInternal}
             className="mt-3 rounded-lg px-4 py-2 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
@@ -183,9 +219,11 @@ export default function Landing({
         {activeTab === "Overall" && (
           <div className="text-slate-700">
             {loading ? (
-              // === Animētais status bar iekš tab “Overall” ===
+              // === Animētais status bar iekš "Overall" ===
               <div className="rounded-xl border bg-white p-5">
-                <div className="text-slate-700 font-medium">Analyzing your site…</div>
+                <div className="text-slate-700 font-medium">
+                  Analyzing your site…
+                </div>
                 <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
                   <div
                     className="h-full bg-[#006D77] transition-all"
@@ -193,12 +231,18 @@ export default function Landing({
                   />
                 </div>
                 <div className="mt-2 text-sm text-slate-600">
-                  Progress: {progress}% • Estimated time: ~{Math.max(1, Math.ceil((100 - progress) / 8))}s
+                  Progress: {progress}% • Estimated time: ~
+                  {Math.max(1, Math.ceil((100 - progress) / 8))}s
                 </div>
               </div>
             ) : shotExists ? (
               <div className="rounded-xl overflow-hidden border">
-                <img src={heroShot} alt="Hero snapshot" className="w-full h-auto block" loading="lazy" />
+                <img
+                  src={heroShot}
+                  alt="Hero snapshot"
+                  className="w-full h-auto block"
+                  loading="lazy"
+                />
               </div>
             ) : (
               <div className="h-48 grid place-items-center text-slate-500">
@@ -212,8 +256,16 @@ export default function Landing({
         {activeTab === "Sections Present" && (
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
             {sectionsPresent.map((s, i) => (
-              <div key={i} className="flex items-center gap-2 rounded-lg border px-3 py-2">
-                <span className={"h-2 w-2 rounded-full " + (s.ok ? "bg-emerald-500" : "bg-rose-500")} />
+              <div
+                key={i}
+                className="flex items-center gap-2 rounded-lg border px-3 py-2"
+              >
+                <span
+                  className={
+                    "h-2 w-2 rounded-full " +
+                    (s.ok ? "bg-emerald-500" : "bg-rose-500")
+                  }
+                />
                 <span className="text-sm">{s.title}</span>
               </div>
             ))}
@@ -224,7 +276,10 @@ export default function Landing({
         {activeTab === "Quick Wins" && (
           <ul className="space-y-2">
             {quickWins.map((q, i) => (
-              <li key={i} className="flex items-start justify-between gap-3 rounded-xl border p-3">
+              <li
+                key={i}
+                className="flex items-start justify-between gap-3 rounded-xl border p-3"
+              >
                 <span className="text-slate-700">{q.text}</span>
                 <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
                   ≈ +{q.upliftPct}% leads
@@ -277,9 +332,7 @@ export default function Landing({
         )}
       </div>
     </div>
-  );
-
-  }
+  ); // <-- šeit beidzas TabsArea komponentes renderis, NAV liekā “}”
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -291,10 +344,18 @@ export default function Landing({
             <span className="font-semibold tracking-tight">Holbox AI</span>
           </div>
           <nav className="hidden md:flex items-center gap-6 text-sm">
-            <a className="hover:opacity-80" href="#preview">Preview</a>
-            <a className="hover:opacity-80" href="#features">Features</a>
-            <a className="hover:opacity-80" href="#faq">FAQ</a>
-            <a className="hover:opacity-80" href="#contact">Contact</a>
+            <a className="hover:opacity-80" href="#preview">
+              Preview
+            </a>
+            <a className="hover:opacity-80" href="#features">
+              Features
+            </a>
+            <a className="hover:opacity-80" href="#faq">
+              FAQ
+            </a>
+            <a className="hover:opacity-80" href="#contact">
+              Contact
+            </a>
           </nav>
           <button
             onClick={handleRun}
@@ -373,23 +434,34 @@ export default function Landing({
               />
             </div>
             <p className="mt-3 text-slate-700 text-sm">
-              This panel shows the current state of the audit (placeholder → analyzing → complete).
+              This panel shows the current state of the audit (placeholder →
+              analyzing → complete).
             </p>
           </div>
         </div>
       </section>
 
       {/* PREVIEW */}
-      <section id="preview" ref={previewRef} className="mx-auto max-w-[1200px] px-3 md:px-4 py-10 md:py-14">
+      <section
+        id="preview"
+        ref={previewRef}
+        className="mx-auto max-w-[1200px] px-3 md:px-4 py-10 md:py-14"
+      >
         {/* === Animētais status bar arī pirms rezultātiem === */}
         {loading && !showResults ? (
           <div className="rounded-2xl border bg-white p-5">
-            <div className="text-slate-700 font-medium">Analyzing your site…</div>
+            <div className="text-slate-700 font-medium">
+              Analyzing your site…
+            </div>
             <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
-              <div className="h-full bg-[#006D77] transition-all" style={{ width: `${progress}%` }} />
+              <div
+                className="h-full bg-[#006D77] transition-all"
+                style={{ width: `${progress}%` }}
+              />
             </div>
             <div className="mt-2 text-sm text-slate-600">
-              Progress: {progress}% • Estimated time: ~{Math.max(1, Math.ceil((100 - progress) / 8))}s
+              Progress: {progress}% • Estimated time: ~
+              {Math.max(1, Math.ceil((100 - progress) / 8))}s
             </div>
           </div>
         ) : !showResults ? (
@@ -402,34 +474,53 @@ export default function Landing({
             <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
               <div className="rounded-2xl border bg-white p-5 md:p-6">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-xl md:text-2xl font-semibold">Your Website’s Grade</h2>
+                  <h2 className="text-xl md:text-2xl font-semibold">
+                    Your Website’s Grade
+                  </h2>
                   <GradeBadge score={demoScore} size="lg" />
                 </div>
                 <div className="mt-4 h-3 rounded-full bg-slate-200 overflow-hidden">
-                  <div className="h-full bg-[#006D77]" style={{ width: `${demoScore}%` }} />
+                  <div
+                    className="h-full bg-[#006D77]"
+                    style={{ width: `${demoScore}%` }}
+                  />
                 </div>
                 <div className="mt-3 text-slate-700">
-                  <span className="text-xl font-semibold">{demoScore} / 100</span>
+                  <span className="text-xl font-semibold">
+                    {demoScore} / 100
+                  </span>
                   <span className="ml-3 text-slate-500">Grade: C (demo)</span>
                 </div>
               </div>
 
               <div className="rounded-2xl border bg-white p-5 md:p-6">
-                <div className="text-sm font-medium text-slate-700">Sub-scores</div>
+                <div className="text-sm font-medium text-slate-700">
+                  Sub-scores
+                </div>
                 <div className="grid grid-cols-1 gap-4 mt-3">
                   <div>
                     <div className="text-sm text-slate-600">Structure</div>
                     <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                      <div className="h-full bg-[#99D6D0]" style={{ width: `${safePct(structurePct)}%` }} />
+                      <div
+                        className="h-full bg-[#99D6D0]"
+                        style={{ width: `${safePct(structurePct)}%` }}
+                      />
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">{safePct(structurePct)}%</div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {safePct(structurePct)}%
+                    </div>
                   </div>
                   <div>
                     <div className="text-sm text-slate-600">Content</div>
                     <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                      <div className="h-full bg-[#006D77]" style={{ width: `${safePct(contentPct)}%` }} />
+                      <div
+                        className="h-full bg-[#006D77]"
+                        style={{ width: `${safePct(contentPct)}%` }}
+                      />
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">{safePct(contentPct)}%</div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {safePct(contentPct)}%
+                    </div>
                   </div>
                 </div>
                 <div className="mt-4 text-sm text-slate-600">
@@ -444,9 +535,12 @@ export default function Landing({
             {/* Scorecard CTA */}
             <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
               <div>
-                <h3 className="text-xl md:text-2xl font-semibold">Get a Free Scorecard for Your Website.</h3>
+                <h3 className="text-xl md:text-2xl font-semibold">
+                  Get a Free Scorecard for Your Website.
+                </h3>
                 <p className="mt-2 text-slate-600">
-                  Download a report with your website’s top 3 weaknesses and a few quick fixes. No credit card, no spam.
+                  Download a report with your website’s top 3 weaknesses and a
+                  few quick fixes. No credit card, no spam.
                 </p>
               </div>
               <form
@@ -459,7 +553,10 @@ export default function Landing({
                   placeholder="Enter your email"
                   className="flex-1 rounded-xl px-4 py-3 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
                 />
-                <button type="submit" className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90">
+                <button
+                  type="submit"
+                  className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
+                >
                   Get My Free Scorecard
                 </button>
               </form>
@@ -473,15 +570,23 @@ export default function Landing({
         <Features onPrimaryClick={handleRun} />
       </div>
 
-      {/* FULL REPORT bloks (zem Features) ar hero.png + BADGES *ikonās* */}
+      {/* FULL REPORT (zem Features) ar hero.png + badges ikonās */}
       <section className="mx-auto max-w-[1200px] px-4 py-12">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
           <div>
-            <h3 className="text-2xl md:text-3xl font-semibold">Full AI Report in 1–2 Minutes — Just $50</h3>
+            <h3 className="text-2xl md:text-3xl font-semibold">
+              Full AI Report in 1–2 Minutes — Just $50
+            </h3>
             <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
-              <li>• A Complete Check-up: We review over 40 critical points in UX, SEO, CRO, and performance.</li>
+              <li>
+                • A Complete Check-up: We review over 40 critical points in UX,
+                SEO, CRO, and performance.
+              </li>
               <li>• Full annotated screenshots</li>
-              <li>• Actionable To-Do List: A prioritized list of fixes you can hand directly to your team or freelancer.</li>
+              <li>
+                • Actionable To-Do List: A prioritized list of fixes you can
+                hand directly to your team or freelancer.
+              </li>
               <li>• PDF + online report (shareable link)</li>
             </ul>
             <div className="mt-6 flex gap-3">
@@ -501,8 +606,12 @@ export default function Landing({
           </div>
 
           <div className="grid gap-3">
-            <img src="/hero.png" alt="Report preview" className="w-full rounded-2xl border" loading="lazy" />
-
+            <img
+              src="/hero.png"
+              alt="Report preview"
+              className="w-full rounded-2xl border"
+              loading="lazy"
+            />
             {/* BADGES kā atsevišķas ikonas rindā */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
@@ -511,9 +620,14 @@ export default function Landing({
                 { title: "Report in 1–2 Minutes", icon: "⏱️" },
                 { title: "Trusted by 10,000+ Audits", icon: "🛡️" },
               ].map((b, i) => (
-                <div key={i} className="rounded-2xl border px-3 py-4 text-center">
+                <div
+                  key={i}
+                  className="rounded-2xl border px-3 py-4 text-center"
+                >
                   <div className="text-2xl md:text-3xl">{b.icon}</div>
-                  <div className="mt-2 text-xs md:text-sm text-slate-700 leading-snug">{b.title}</div>
+                  <div className="mt-2 text-xs md:text-sm text-slate-700 leading-snug">
+                    {b.title}
+                  </div>
                 </div>
               ))}
             </div>
@@ -521,7 +635,7 @@ export default function Landing({
         </div>
       </section>
 
-      {/* COUNTERS PĀRCELTI AUGŠUP */}
+      {/* COUNTERS */}
       <Counters />
 
       {/* Case study */}
@@ -529,17 +643,26 @@ export default function Landing({
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 items-center">
           <div className="md:col-span-2">
             <h3 className="text-2xl font-semibold">
-              How Holbox AI Gave This Business Owner Confidence in Their Agency's Work.
+              How Holbox AI Gave This Business Owner Confidence in Their
+              Agency's Work.
             </h3>
             <p className="mt-2 text-slate-600">
-              Before: CTA below the fold, slow load times. After: CTA above the fold, load time &lt; 2.0s. Result: more sign-ups and lower CPA.
+              Before: CTA below the fold, slow load times. After: CTA above the
+              fold, load time &lt; 2.0s. Result: more sign-ups and lower CPA.
             </p>
             <blockquote className="mt-4 rounded-xl bg-slate-50 p-4 text-slate-700 text-sm">
-              “I used to worry if I was wasting money, but the Holbox AI report gave me a clear list of improvements to request. Now I know I'm getting a great return.”
+              “I used to worry if I was wasting money, but the Holbox AI report
+              gave me a clear list of improvements to request. Now I know I'm
+              getting a great return.”
             </blockquote>
           </div>
           <div className="rounded-2xl border overflow-hidden">
-            <img src="/before-after.png" alt="Before / After chart" className="w-full h-auto" loading="lazy" />
+            <img
+              src="/before-after.png"
+              alt="Before / After chart"
+              className="w-full h-auto"
+              loading="lazy"
+            />
           </div>
         </div>
       </section>
@@ -549,10 +672,22 @@ export default function Landing({
         <h3 className="text-2xl font-semibold">FAQ</h3>
         <div className="mt-6 grid md:grid-cols-2 gap-6">
           {[
-            ["Does AI make mistakes?", "The analysis is based on standards and heuristics; a human review is still possible."],
-            ["Do you need server access?", "No, the audit runs on publicly available content only."],
-            ["Are my data secure?", "Reports are deleted after 14 days unless permanent access is purchased."],
-            ["Which pages are scanned?", "Key pages like home, product/service, and forms/checkout (configurable)."],
+            [
+              "Does AI make mistakes?",
+              "The analysis is based on standards and heuristics; a human review is still possible.",
+            ],
+            [
+              "Do you need server access?",
+              "No, the audit runs on publicly available content only.",
+            ],
+            [
+              "Are my data secure?",
+              "Reports are deleted after 14 days unless permanent access is purchased.",
+            ],
+            [
+              "Which pages are scanned?",
+              "Key pages like home, product/service, and forms/checkout (configurable).",
+            ],
             [
               "Can I use this to evaluate the work of my marketing team or agency?",
               "Yes. Many of our customers use Holbox AI to get an unbiased report on a new website or landing page. It's the fastest way to get a second opinion and ensure you're getting a great return.",
@@ -565,7 +700,10 @@ export default function Landing({
           ))}
         </div>
         <div className="mt-6">
-          <button onClick={handleRun} className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90">
+          <button
+            onClick={handleRun}
+            className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
+          >
             Still have questions? Get a Free Scorecard
           </button>
         </div>
