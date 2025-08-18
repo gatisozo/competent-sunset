@@ -18,6 +18,10 @@ function safePct(n?: number) {
 }
 
 const BLUR_TABS = new Set(["Findings", "Content Audit", "Copy Suggestions"]);
+const DEV_MODE =
+  (typeof import.meta !== "undefined" && (import.meta as any).env?.DEV) ||
+  (typeof import.meta !== "undefined" &&
+    (import.meta as any).env?.VITE_DEV_MODE === "1");
 
 export default function Landing({
   freeReport: _freeReport,
@@ -31,7 +35,7 @@ export default function Landing({
   const [activeTab, setActiveTab] = useState<string>("Overall");
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // --- Demo skaitļi (aizstāj ar reāliem pēc vajadzības) ---
+  // --- Demo skaitļi (mock; aizstāj ar reālajiem, ja pieslēdz API) ---
   const demoScore = 73;
   const structurePct = 76;
   const contentPct = 70;
@@ -47,50 +51,51 @@ export default function Landing({
     { title: "footer", ok: true },
   ];
 
-  const quickWins = [
-    "Add testimonials to build credibility.",
-    "Improve navigation structure for ease of access.",
-    "Enhance FAQ section with clearer formatting.",
+  // === Quick Wins ar % ieguvumu (JAUNS) ===
+  const quickWins: { text: string; upliftPct: number }[] = [
+    { text: "Add testimonials to build credibility.", upliftPct: 6 },
+    { text: "Improve navigation structure for ease of access.", upliftPct: 4 },
+    { text: "Enhance FAQ section with clearer formatting.", upliftPct: 3 },
   ];
 
+  // Prioritized backlog ar already uplift; akcentēts badge renderī
   const backlog = [
     {
       title: "Revise Hero Section Copy",
       impact: "high",
       effort: "2d",
-      uplift: "+20% leads",
+      upliftPct: 20,
     },
     {
       title: "Integrate Testimonials",
       impact: "med",
       effort: "3d",
-      uplift: "+10% leads",
+      upliftPct: 10,
     },
     {
       title: "Enhance FAQ Section",
       impact: "med",
       effort: "2d",
-      uplift: "+10% leads",
+      upliftPct: 10,
     },
     {
       title: "Add Pricing Information",
       impact: "low",
       effort: "4d",
-      uplift: "+5% leads",
+      upliftPct: 5,
     },
     {
       title: "Improve Navigation Flow",
       impact: "high",
       effort: "3d",
-      uplift: "+20% leads",
+      upliftPct: 20,
     },
   ];
 
-  // --- Demo “screenshot” (bilde vai placeholder) ---
-  const heroShot = "/report-1.png"; // ja tev repo saknē ir public/report-1.png (kā iepriekš), ceļš der
+  // --- Demo “screenshot” (bilde) ---
+  const heroShot = "/report-1.png";
   const shotExists = true;
 
-  // ---- helpers ----
   const normalizeUrl = (u: string) =>
     u.startsWith("http") ? u : `https://${u}`;
 
@@ -128,14 +133,23 @@ export default function Landing({
     }
   };
 
+  // === DEV workflow → uzreiz uz Full report ar dev=1 & url ===
   const orderFullInternal = () => {
-    window.location.href = "/full";
+    const href = DEV_MODE
+      ? `/full?dev=1${
+          url ? `&url=${encodeURIComponent(normalizeUrl(url))}` : ""
+        }`
+      : `/full`;
+    window.location.href = href;
   };
   const seeSampleInternal = () => {
-    window.location.href = "/full?dev=1";
+    const href = `/full?dev=1${
+      url ? `&url=${encodeURIComponent(normalizeUrl(url))}` : ""
+    }`;
+    window.location.href = href;
   };
 
-  // ---- Tab saturs ----
+  // ---- Tab helpers ----
   const TabButton = ({ name }: { name: string }) => (
     <button
       type="button"
@@ -227,38 +241,50 @@ export default function Landing({
           </div>
         )}
 
-        {/* QUICK WINS */}
+        {/* QUICK WINS — ar % badge (JAUNS) */}
         {activeTab === "Quick Wins" && (
-          <ul className="list-disc pl-5 space-y-1">
+          <ul className="space-y-2">
             {quickWins.map((q, i) => (
-              <li key={i} className="text-slate-700">
-                {q}
+              <li
+                key={i}
+                className="flex items-start justify-between gap-3 rounded-xl border p-3"
+              >
+                <span className="text-slate-700">{q.text}</span>
+                <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
+                  ≈ +{q.upliftPct}% leads
+                </span>
               </li>
             ))}
           </ul>
         )}
 
-        {/* BACKLOG */}
+        {/* BACKLOG — akcentēts % badge */}
         {activeTab === "Prioritized Backlog" && (
           <div className="grid md:grid-cols-2 gap-3">
             {backlog.map((b, i) => (
               <div key={i} className="rounded-xl border p-4">
-                <div className="font-medium">{b.title}</div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Impact:{" "}
-                  <span
-                    className={
-                      b.impact === "high"
-                        ? "text-rose-600"
-                        : b.impact === "med"
-                        ? "text-amber-600"
-                        : "text-emerald-600"
-                    }
-                  >
-                    {b.impact}
-                  </span>{" "}
-                  • Effort: {b.effort} • Estimated:{" "}
-                  <span className="font-medium">{b.uplift}</span>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium">{b.title}</div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      Impact:{" "}
+                      <span
+                        className={
+                          b.impact === "high"
+                            ? "text-rose-600"
+                            : b.impact === "med"
+                            ? "text-amber-600"
+                            : "text-emerald-600"
+                        }
+                      >
+                        {b.impact}
+                      </span>{" "}
+                      • Effort: {b.effort}
+                    </div>
+                  </div>
+                  <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
+                    ≈ +{b.upliftPct}% leads
+                  </span>
                 </div>
               </div>
             ))}
