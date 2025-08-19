@@ -63,6 +63,26 @@ function buildScreenshotUrls(url: string): {
   };
 }
 
+/* ---------- safe JSON parse ---------- */
+function tryParseJSON(s: string): any | null {
+  try {
+    return JSON.parse(s);
+  } catch {
+    // salvage between first { and last }
+    const i = s.indexOf("{");
+    const j = s.lastIndexOf("}");
+    if (i >= 0 && j > i) {
+      const cut = s.slice(i, j + 1);
+      try {
+        return JSON.parse(cut);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 /* ---------- strict JSON schema ---------- */
 const croSchema = {
   type: "object",
@@ -91,10 +111,9 @@ const croSchema = {
         properties: {
           title: { type: "string" },
           impact: { type: "string", enum: ["high", "medium", "low"] },
-          effort: { type: "string" }, // e.g. "1-2d", "3-5h"
+          effort: { type: "string" }, // e.g. "1-2d"
           eta_days: { type: "integer", minimum: 0, maximum: 60 },
         },
-        // IMPORTANT: include ALL keys from properties in required (strict mode)
         required: ["title", "impact", "effort", "eta_days"],
         additionalProperties: false,
       },
@@ -223,41 +242,49 @@ ${commonTail}`;
 
     send("progress", { value: (progress = Math.max(progress, 30)) });
 
-    const resp = await openai.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: userContent },
-        {
-          role: "user",
-          content: "Return JSON only that matches the schema exactly.",
+    // 3) first attempt: strict schema
+    const attempt = async (strict: boolean) => {
+      const resp = await openai.responses.create({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: userContent },
+          {
+            role: "user",
+            content: "Return JSON only that matches the schema exactly.",
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "cro_full_report",
+            schema: croSchema,
+            strict,
+          },
         },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "cro_full_report",
-          schema: croSchema,
-          strict: true,
-        },
-      },
-      max_output_tokens: 1400,
-    });
-
-    // 3) parse output
-    const outputText: string =
+        max_output_tokens: 1400,
+      });
       // @ts-ignore SDK variants
-      (resp as any).output_text ||
-      JSON.stringify((resp as any).output?.[0]?.content?.[0]?.text || resp);
+      const outputText =
+        (resp as any).output_text ||
+        JSON.stringify((resp as any).output?.[0]?.content?.[0]?.text || resp);
+      return outputText;
+    };
 
-    let data: any = {};
+    let outputText = "";
     try {
-      data = JSON.parse(outputText);
+      outputText = await attempt(true);
     } catch {
+      // relax schema and try once more
+      send("progress", { value: (progress = Math.max(progress, 40)) });
+      outputText = await attempt(false);
+    }
+
+    let data = tryParseJSON(outputText);
+    if (!data) {
       throw new Error("Model returned non-JSON output");
     }
 
-    // 4) final payload
     const result = {
       url,
       title: title || undefined,

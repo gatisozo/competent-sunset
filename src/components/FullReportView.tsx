@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-// ja tev ir lokāli tipi lib/analyze, vari paturēt importus; šeit neriskējam ar neatbilstošiem laukiem
 
 /* ---------------- utilities ---------------- */
 function getQS(name: string): string | null {
@@ -49,8 +48,6 @@ type BacklogItem = {
   title: string;
   impact: Impact;
   eta_days?: number;
-  // dažās versijās nav 'effort' — tāpēc nerādām to tieši, vai lietojam 'any'
-  // effort?: string;
 };
 type FullReport = {
   url: string;
@@ -60,7 +57,7 @@ type FullReport = {
   key_findings: Finding[];
   quick_wins?: string[];
   prioritized_backlog?: BacklogItem[];
-  content_audit?: Array<any>; // dažādās versijās struktūra atšķiras
+  content_audit?: Array<any>;
   screenshots?: { hero?: string | null } | null;
 };
 
@@ -141,7 +138,7 @@ function letterFromScore(n: number) {
   return "F";
 }
 
-// “drošāks” vērtējums, kas nepaļaujas uz `status` lauku obligāti
+// drošs aprēķins, ja backend neatgriež score
 function computeScoreSafe(findings: any[] = [], audit: any[] = []) {
   let score = 100;
   for (const f of findings) {
@@ -278,22 +275,29 @@ export default function FullReportView() {
         </div>
       </div>
 
-      {/* URL input */}
-      <div className="flex gap-2">
+      {/* URL input — FORM, lai Enter strādā */}
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          startStream(url, "full");
+        }}
+      >
         <input
           value={url}
           placeholder="https://example.com"
           onChange={(e) => setUrl(e.target.value)}
           className="flex-1 rounded-lg border px-3 py-2 bg-white"
+          type="url"
         />
         <button
-          onClick={() => startStream(url, "full")}
+          type="submit"
           className="rounded-lg bg-[#006D77] text-white px-4 py-2 disabled:opacity-60"
           disabled={loading || !url.trim()}
         >
           {loading ? "Analyzing…" : "Analyze"}
         </button>
-      </div>
+      </form>
 
       {/* Loader */}
       {loading && (
@@ -426,7 +430,6 @@ export default function FullReportView() {
                           <div className="font-medium text-sm">{b.title}</div>
                           <div className="text-xs text-slate-600">
                             Impact: {b.impact}
-                            {/* effort ne vienmēr ir shēmā – ja tomēr ir, var pievienot ar (b as any).effort */}
                             {typeof (b as any)?.effort === "string"
                               ? ` • Effort: ${(b as any).effort}`
                               : ""}
