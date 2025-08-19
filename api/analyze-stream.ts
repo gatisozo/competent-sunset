@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 
-/* ---------- small helpers ---------- */
+/* ---------- helpers ---------- */
 function normalizeUrl(input: string): string {
   const s = String(input || "").trim();
   if (!s) throw new Error("Missing URL");
@@ -91,10 +91,11 @@ const croSchema = {
         properties: {
           title: { type: "string" },
           impact: { type: "string", enum: ["high", "medium", "low"] },
-          effort: { type: "string" },
+          effort: { type: "string" }, // e.g. "1-2d", "3-5h"
           eta_days: { type: "integer", minimum: 0, maximum: 60 },
         },
-        required: ["title", "impact"],
+        // IMPORTANT: include ALL keys from properties in required (strict mode)
+        required: ["title", "impact", "effort", "eta_days"],
         additionalProperties: false,
       },
       maxItems: 10,
@@ -145,7 +146,7 @@ const croSchema = {
   additionalProperties: false,
 } as const;
 
-/* ---------- SSE wiring ---------- */
+/* ---------- SSE helpers ---------- */
 function sseHeaders(res: VercelResponse) {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -158,24 +159,22 @@ function sendEvent(res: VercelResponse, event: string, data: any) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  let tick: any;
+  let heartbeat: any;
   try {
     const url = normalizeUrl(String(req.query.url || req.body?.url || ""));
     const mode = String(req.query.mode || req.body?.mode || "full"); // "free" | "full"
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     sseHeaders(res);
-
     const send = (event: string, data: any) => sendEvent(res, event, data);
 
     let progress = 0;
-    const tick = setInterval(() => {
+    tick = setInterval(() => {
       progress = Math.min(95, progress + 1);
       send("progress", { value: progress });
     }, 800);
-
-    const heartbeat = setInterval(() => {
-      send("ping", { t: Date.now() });
-    }, 15000);
+    heartbeat = setInterval(() => send("ping", { t: Date.now() }), 15000);
 
     // 1) fetch page
     send("progress", { value: (progress = Math.max(progress, 5)) });
@@ -192,24 +191,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const shots = buildScreenshotUrls(url);
     send("progress", { value: (progress = Math.max(progress, 20)) });
 
-    // 2) build prompt
+    // 2) prompts
     const system =
-      "You are a CRO expert. Analyze landing pages for conversion best practices (above-the-fold clarity, message match, CTA prominence, trust, friction, mobile heuristics, Core Web Vitals hints). Output STRICT JSON that adheres to the schema.";
+      "You are a CRO expert. Analyze landing pages for conversion best practices (above-the-fold clarity, message match, CTA prominence, trust, friction, mobile heuristics, Core Web Vitals hints). Output STRICT JSON that adheres exactly to the provided JSON schema.";
+
+    const commonTail = `
+IMPORTANT:
+- For prioritized_backlog items, ALWAYS include "effort" (e.g. "1-2d", "3-5h") and "eta_days" (integer).
+- Do not add extra keys. Do not omit any required keys.
+- Keep arrays within their max limits.
+- Return ONLY JSON.`;
 
     const userContent =
       mode === "free"
         ? `Mode: FREE
-Return a concise subset: score, summary, key_findings (max 3), quick_wins (max 3), and content_audit (hero/value_prop/social_proof/pricing/faq/contact/footer) with status+suggestions. Keep JSON valid.
+Return a concise subset using the same schema fields but keep it short (top 3 findings, 2-3 quick_wins).
 URL: ${url}
 TITLE: ${title || "(none)"}
 TEXT (truncated):
-${text}`
+${text}
+${commonTail}`
         : `Mode: FULL
-Return a full report including content_audit (hero/value_prop/social_proof/pricing/faq/contact/footer), findings, quick_wins, prioritized_backlog. All required fields in the schema must be present.
+Return a full report including content_audit (hero/value_prop/social_proof/pricing/faq/contact/footer),
+findings, quick_wins, prioritized_backlog. All required fields in the schema must be present.
+For each prioritized_backlog item provide both "effort" and "eta_days" (integer).
 URL: ${url}
 TITLE: ${title || "(none)"}
 TEXT (truncated):
-${text}`;
+${text}
+${commonTail}`;
 
     send("progress", { value: (progress = Math.max(progress, 30)) });
 
@@ -234,7 +244,7 @@ ${text}`;
       max_output_tokens: 1400,
     });
 
-    // 3) parse
+    // 3) parse output
     const outputText: string =
       // @ts-ignore SDK variants
       (resp as any).output_text ||
@@ -247,7 +257,7 @@ ${text}`;
       throw new Error("Model returned non-JSON output");
     }
 
-    // 4) attach screenshots etc.
+    // 4) final payload
     const result = {
       url,
       title: title || undefined,
@@ -267,8 +277,8 @@ ${text}`;
     sendEvent(res, "error", { message: e?.message || "stream failed" });
     res.end();
   } finally {
-    clearInterval(tick as any);
-    clearInterval(heartbeat as any);
+    if (tick) clearInterval(tick);
+    if (heartbeat) clearInterval(heartbeat);
   }
 }
 
