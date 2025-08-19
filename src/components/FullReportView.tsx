@@ -1,9 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  type FullReport,
-  type Suggestion,
-  type ContentAuditItem,
-} from "../lib/analyze";
+// ja tev ir lokāli tipi lib/analyze, vari paturēt importus; šeit neriskējam ar neatbilstošiem laukiem
 
 /* ---------------- utilities ---------------- */
 function getQS(name: string): string | null {
@@ -23,11 +19,11 @@ function easeOutCubic(t: number) {
 function animateNumber(
   setter: (n: number) => void,
   from: number,
-  to number,
+  to: number,
   ms = 900
 ) {
-  const start = performance.now(),
-    delta = to - from;
+  const start = performance.now();
+  const delta = to - from;
   const tick = (now: number) => {
     const t = clamp((now - start) / ms, 0, 1);
     const eased = easeOutCubic(t);
@@ -46,60 +42,35 @@ const heroCropImg: React.CSSProperties = {
   objectPosition: "top center",
 };
 
-/* -------------- types (from analyze.ts) -------------- */
-// kept for local safety; TS will merge with imports
+/* -------------- types -------------- */
 type Impact = "high" | "medium" | "low";
-
-function isHeroFinding(title: string) {
-  const t = title.toLowerCase();
-  return (
-    t.includes("hero") ||
-    t.includes("above the fold") ||
-    t.includes("headline") ||
-    t.includes("cta") ||
-    t.includes("primary button")
-  );
-}
-function hasMeaningfulIssues(
-  findings: { title: string }[] = [],
-  audit?: { section: string; status: "ok" | "weak" | "missing" }[]
-) {
-  const hf = findings.some((f) => isHeroFinding(f.title));
-  const wk = (audit || []).some((c) => c.status !== "ok");
-  return hf || wk;
-}
-
-/* -------------- scoring -------------- */
-function computeScore(
-  findings: Suggestion[] = [],
-  audit: ContentAuditItem[] = []
-) {
-  let score = 100;
-  for (const f of findings)
-    score -= f.impact === "high" ? 10 : f.impact === "medium" ? 5 : 2;
-  for (const c of audit)
-    score -= c.status === "missing" ? 5 : c.status === "weak" ? 2 : 0;
-  return clamp(Math.round(score), 0, 100);
-}
-function letterFromScore(n: number) {
-  if (n >= 90) return "A";
-  if (n >= 80) return "B";
-  if (n >= 70) return "C";
-  if (n >= 60) return "D";
-  return "F";
-}
-function scoreBarColor(n: number) {
-  if (n >= 80) return "bg-emerald-500";
-  if (n >= 60) return "bg-amber-500";
-  return "bg-rose-500";
-}
+type Finding = { title: string; impact: Impact; recommendation: string };
+type BacklogItem = {
+  title: string;
+  impact: Impact;
+  eta_days?: number;
+  // dažās versijās nav 'effort' — tāpēc nerādām to tieši, vai lietojam 'any'
+  // effort?: string;
+};
+type FullReport = {
+  url: string;
+  title?: string;
+  score?: number;
+  summary?: string;
+  key_findings: Finding[];
+  quick_wins?: string[];
+  prioritized_backlog?: BacklogItem[];
+  content_audit?: Array<any>; // dažādās versijās struktūra atšķiras
+  screenshots?: { hero?: string | null } | null;
+};
 
 /* -------------- screenshot URL handling -------------- */
 function buildScreenshotUrl(target: string) {
   const url = /^https?:\/\//i.test(target) ? target : `https://${target}`;
   const tmpl =
     (import.meta as any).env?.VITE_SCREENSHOT_URL_TMPL ||
-    (typeof process !== "undefined" && (process as any).env?.SCREENSHOT_URL_TMPL);
+    (typeof process !== "undefined" &&
+      (process as any).env?.SCREENSHOT_URL_TMPL);
   if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
   return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
 }
@@ -110,7 +81,12 @@ function withCacheBuster(u: string) {
 function useSmartImage(
   primary?: string | null,
   backup?: string | null
-): { src?: string; loading: boolean; onLoad: () => void; onError: () => void } {
+): {
+  src?: string;
+  loading: boolean;
+  onLoad: (e?: any) => void;
+  onError: () => void;
+} {
   const [src, setSrc] = useState<string | undefined>(
     primary || backup || undefined
   );
@@ -156,6 +132,35 @@ function useSmartImage(
   return { src, loading, onLoad, onError };
 }
 
+/* -------------- scoring -------------- */
+function letterFromScore(n: number) {
+  if (n >= 90) return "A";
+  if (n >= 80) return "B";
+  if (n >= 70) return "C";
+  if (n >= 60) return "D";
+  return "F";
+}
+
+// “drošāks” vērtējums, kas nepaļaujas uz `status` lauku obligāti
+function computeScoreSafe(findings: any[] = [], audit: any[] = []) {
+  let score = 100;
+  for (const f of findings) {
+    const imp = (f?.impact as Impact) || "medium";
+    score -= imp === "high" ? 10 : imp === "medium" ? 5 : 2;
+  }
+  for (const c of audit) {
+    const st = (c as any)?.status as "ok" | "weak" | "missing" | undefined;
+    if (st === "missing") score -= 5;
+    else if (st === "weak") score -= 2;
+  }
+  return clamp(Math.round(score), 0, 100);
+}
+function scoreBarColor(n: number) {
+  if (n >= 80) return "bg-emerald-500";
+  if (n >= 60) return "bg-amber-500";
+  return "bg-rose-500";
+}
+
 /* -------------- main component -------------- */
 export default function FullReportView() {
   const autostart = getQS("autostart") === "1";
@@ -168,11 +173,19 @@ export default function FullReportView() {
   const [score, setScore] = useState(0);
 
   const heroPrimary = useMemo(
-    () => (report?.screenshots?.hero ? report.screenshots.hero : url ? buildScreenshotUrl(url) : undefined),
+    () =>
+      report?.screenshots?.hero
+        ? report.screenshots.hero
+        : url
+        ? buildScreenshotUrl(url)
+        : undefined,
     [report?.screenshots?.hero, url]
   );
   const heroBackup = useMemo(
-    () => (url ? `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200` : undefined),
+    () =>
+      url
+        ? `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`
+        : undefined,
     [url]
   );
   const heroImg = useSmartImage(heroPrimary, heroBackup);
@@ -183,13 +196,14 @@ export default function FullReportView() {
   }, [report?.quick_wins]);
 
   async function startStream(u: string, mode: "full" | "free" = "full") {
-    const url = /^https?:\/\//i.test(u) ? u : `https://${u}`;
+    const target = /^https?:\/\//i.test(u) ? u : `https://${u}`;
     setLoading(true);
     setProgress(0);
     setReport(null);
 
-    const base = "/api/analyze-stream";
-    const src = `${base}?url=${encodeURIComponent(url)}&mode=${mode}&sid=${Date.now()}`;
+    const src = `/api/analyze-stream?url=${encodeURIComponent(
+      target
+    )}&mode=${mode}&sid=${Date.now()}`;
 
     const es = new EventSource(src);
 
@@ -205,9 +219,15 @@ export default function FullReportView() {
         const data = JSON.parse(e.data) as FullReport;
         setReport(data);
         setProgress(100);
-        // animate score bar
-        const sc = clamp(data.score ?? computeScore(data.key_findings || [], data.content_audit || []), 0, 100);
-        animateNumber(setScore, 0, sc, 800);
+
+        const baseScore =
+          typeof data.score === "number"
+            ? data.score
+            : computeScoreSafe(
+                data.key_findings || [],
+                data.content_audit || []
+              );
+        animateNumber(setScore, 0, baseScore, 800);
       } catch (err: any) {
         console.error(err);
         alert("Invalid result format");
@@ -278,11 +298,18 @@ export default function FullReportView() {
       {/* Loader */}
       {loading && (
         <div className="mt-4 rounded-xl border bg-white p-5">
-          <div className="text-slate-700 font-medium">Generating full report…</div>
-          <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
-            <div className="h-full bg-[#006D77] transition-all" style={{ width: `${progress}%` }} />
+          <div className="text-slate-700 font-medium">
+            Generating full report…
           </div>
-          <div className="mt-2 text-sm text-slate-600">Progress: {progress}%</div>
+          <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
+            <div
+              className="h-full bg-[#006D77] transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className="mt-2 text-sm text-slate-600">
+            Progress: {progress}%
+          </div>
         </div>
       )}
 
@@ -311,11 +338,15 @@ export default function FullReportView() {
                     onError={heroImg.onError}
                   />
                 ) : (
-                  <div className="h-full grid place-items-center text-slate-400">no image</div>
+                  <div className="h-full grid place-items-center text-slate-400">
+                    no image
+                  </div>
                 )}
               </div>
               {heroImg.loading && (
-                <div className="mt-2 text-xs text-slate-500">Loading screenshot…</div>
+                <div className="mt-2 text-xs text-slate-500">
+                  Loading screenshot…
+                </div>
               )}
             </div>
 
@@ -323,7 +354,7 @@ export default function FullReportView() {
             <div className="mt-6">
               <div className="text-sm text-slate-500">Key Findings</div>
               <div className="mt-2 space-y-3">
-                {report.key_findings.map((f, i) => (
+                {report.key_findings.map((f: Finding, i: number) => (
                   <div key={i} className="rounded-xl border p-3">
                     <div className="flex items-center gap-2">
                       <span
@@ -352,7 +383,10 @@ export default function FullReportView() {
             <div>
               <div className="text-sm text-slate-500">Your Website’s Grade</div>
               <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                <div className={clsx("h-full", scoreBarColor(score))} style={{ width: `${score}%` }} />
+                <div
+                  className={clsx("h-full", scoreBarColor(score))}
+                  style={{ width: `${score}%` }}
+                />
               </div>
               <div className="mt-2 text-sm">
                 {score} / 100 • Grade {gradeLetter}
@@ -363,8 +397,11 @@ export default function FullReportView() {
             <div>
               <div className="text-sm text-slate-500">Quick Wins</div>
               <ul className="mt-2 space-y-2">
-                {(report.quick_wins || []).map((w, i) => (
-                  <li key={i} className="flex items-start justify-between gap-3 rounded-xl border p-3">
+                {(report.quick_wins || []).map((w: string, i: number) => (
+                  <li
+                    key={i}
+                    className="flex items-start justify-between gap-3 rounded-xl border p-3"
+                  >
                     <span className="text-sm text-slate-700">{w}</span>
                     <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
                       ≈ +10% leads
@@ -381,23 +418,36 @@ export default function FullReportView() {
             <div>
               <div className="text-sm text-slate-500">Prioritized Backlog</div>
               <div className="mt-2 space-y-2">
-                {(report.prioritized_backlog || []).map((b, i) => (
-                  <div key={i} className="rounded-lg border px-3 py-2">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-sm">{b.title}</div>
-                        <div className="text-xs text-slate-600">
-                          Impact: {b.impact}
-                          {b.effort ? ` • Effort: ${b.effort}` : ""}
-                          {typeof b.eta_days === "number" ? ` • ETA: ${b.eta_days}d` : ""}
+                {(report.prioritized_backlog || []).map(
+                  (b: BacklogItem, i: number) => (
+                    <div key={i} className="rounded-lg border px-3 py-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium text-sm">{b.title}</div>
+                          <div className="text-xs text-slate-600">
+                            Impact: {b.impact}
+                            {/* effort ne vienmēr ir shēmā – ja tomēr ir, var pievienot ar (b as any).effort */}
+                            {typeof (b as any)?.effort === "string"
+                              ? ` • Effort: ${(b as any).effort}`
+                              : ""}
+                            {typeof b.eta_days === "number"
+                              ? ` • ETA: ${b.eta_days}d`
+                              : ""}
+                          </div>
                         </div>
+                        <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
+                          ≈ +
+                          {b.impact === "high"
+                            ? 20
+                            : b.impact === "medium"
+                            ? 10
+                            : 5}
+                          % leads
+                        </span>
                       </div>
-                      <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                        ≈ +{b.impact === "high" ? 20 : b.impact === "medium" ? 10 : 5}% leads
-                      </span>
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
               </div>
             </div>
 
