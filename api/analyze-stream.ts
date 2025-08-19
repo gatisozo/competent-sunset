@@ -38,16 +38,16 @@ function detectSections(text: string) {
     ]),
     social_proof: has([
       "testimonial",
-      "what our customers",
-      "as seen in",
       "reviews",
+      "cases",
       "trusted by",
+      "logos",
+      "clients",
     ]),
-    pricing: has(["pricing", "price", "plans"]),
-    features: has(["feature", "capabilities", "what you get"]),
-    faq: has(["faq", "frequently asked", "questions"]),
-    contact: has(["contact", "email us", "get in touch", "support"]),
-    footer: has(["privacy", "terms", "©"]),
+    pricing: has(["pricing", "price", "plan", "plans"]),
+    faq: has(["faq", "frequently asked"]),
+    contact: has(["contact", "email", "phone"]),
+    footer: has(["©", "copyright", "privacy", "terms"]),
   };
 }
 function buildScreenshotUrls(url: string): {
@@ -81,9 +81,24 @@ const croSchema = {
         required: ["title", "impact", "recommendation"],
         additionalProperties: false,
       },
-      maxItems: 8,
+      maxItems: 10,
     },
-    quick_wins: { type: "array", items: { type: "string" }, maxItems: 6 },
+    quick_wins: { type: "array", items: { type: "string" }, maxItems: 7 },
+    prioritized_backlog: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          impact: { type: "string", enum: ["high", "medium", "low"] },
+          effort: { type: "string" },
+          eta_days: { type: "integer", minimum: 0, maximum: 60 },
+        },
+        required: ["title", "impact"],
+        additionalProperties: false,
+      },
+      maxItems: 10,
+    },
     findings: {
       type: "array",
       items: {
@@ -94,22 +109,6 @@ const croSchema = {
           recommendation: { type: "string" },
         },
         required: ["title", "impact", "recommendation"],
-        additionalProperties: false,
-      },
-      maxItems: 20,
-    },
-    prioritized_backlog: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          impact: { type: "integer", minimum: 1, maximum: 3 },
-          effort: { type: "integer", minimum: 1, maximum: 3 },
-          eta_days: { type: "integer" },
-          notes: { type: "string" },
-        },
-        required: ["title", "impact", "effort", "eta_days", "notes"],
         additionalProperties: false,
       },
       maxItems: 12,
@@ -146,77 +145,67 @@ const croSchema = {
   additionalProperties: false,
 } as const;
 
-/* ---------- SSE ---------- */
+/* ---------- SSE wiring ---------- */
+function sseHeaders(res: VercelResponse) {
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+}
+function sendEvent(res: VercelResponse, event: string, data: any) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
-    res.writeHead(405).end();
-    return;
-  }
-
-  if (!process.env.OPENAI_API_KEY) {
-    res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "OPENAI_API_KEY is not set" }));
-    return;
-  }
-
-  const urlParam = String(req.query.url || "");
-  const mode = String(req.query.mode || "full") as "free" | "full";
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-  });
-
-  const send = (event: string, data: any) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
-  const heartbeat = setInterval(() => res.write(`:\n\n`), 15000);
-  let progress = 0;
-  const tick = setInterval(() => {
-    progress = Math.min(95, progress + Math.random() * 6 + 2);
-    send("progress", { value: Math.floor(progress) });
-  }, 400);
-
   try {
-    const url = normalizeUrl(urlParam);
+    const url = normalizeUrl(String(req.query.url || req.body?.url || ""));
+    const mode = String(req.query.mode || req.body?.mode || "full"); // "free" | "full"
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    sseHeaders(res);
+
+    const send = (event: string, data: any) => sendEvent(res, event, data);
+
+    let progress = 0;
+    const tick = setInterval(() => {
+      progress = Math.min(95, progress + 1);
+      send("progress", { value: progress });
+    }, 800);
+
+    const heartbeat = setInterval(() => {
+      send("ping", { t: Date.now() });
+    }, 15000);
+
+    // 1) fetch page
     send("progress", { value: (progress = Math.max(progress, 5)) });
-
-    // fetch page
-    const pageResp = await fetch(url, {
-      headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
+    const page = await fetch(url, {
       redirect: "follow",
+      headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
     });
-    if (!pageResp.ok)
-      throw new Error(
-        `Fetch failed: ${pageResp.status} ${pageResp.statusText}`
-      );
-    const html = await pageResp.text();
-    send("progress", { value: (progress = Math.max(progress, 15)) });
-
+    if (!page.ok) throw new Error(`Fetch failed: ${page.status}`);
+    const html = await page.text();
     const title = extractTitle(html);
     const text = extractText(html);
     const sections = detectSections(text);
-    const { primary: screenshotUrl, backup: screenshotBackup } =
-      buildScreenshotUrls(url);
 
-    // OpenAI
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const shots = buildScreenshotUrls(url);
+    send("progress", { value: (progress = Math.max(progress, 20)) });
+
+    // 2) build prompt
     const system =
-      "You are a CRO expert. Analyze landing page copy and structure. Return STRICT JSON matching the provided schema.";
+      "You are a CRO expert. Analyze landing pages for conversion best practices (above-the-fold clarity, message match, CTA prominence, trust, friction, mobile heuristics, Core Web Vitals hints). Output STRICT JSON that adheres to the schema.";
+
     const userContent =
       mode === "free"
         ? `Mode: FREE
-Return a lean but complete report (fill all required fields in the schema, but keep content concise).
+Return a concise subset: score, summary, key_findings (max 3), quick_wins (max 3), and content_audit (hero/value_prop/social_proof/pricing/faq/contact/footer) with status+suggestions. Keep JSON valid.
 URL: ${url}
 TITLE: ${title || "(none)"}
 TEXT (truncated):
 ${text}`
         : `Mode: FULL
-Return a full report including content_audit (hero/value_prop/social_proof/pricing/features/faq/contact/footer) and prioritized_backlog. All required fields in the schema must be present.
+Return a full report including content_audit (hero/value_prop/social_proof/pricing/faq/contact/footer), findings, quick_wins, prioritized_backlog. All required fields in the schema must be present.
 URL: ${url}
 TITLE: ${title || "(none)"}
 TEXT (truncated):
@@ -245,38 +234,29 @@ ${text}`;
       max_output_tokens: 1400,
     });
 
-    // @ts-ignore
-    const rawText =
-      resp.output_text ??
-      // @ts-ignore
-      resp.output?.[0]?.content?.[0]?.text ??
-      (typeof (resp as any).content === "string"
-        ? (resp as any).content
-        : null);
+    // 3) parse
+    const outputText: string =
+      // @ts-ignore SDK variants
+      (resp as any).output_text ||
+      JSON.stringify((resp as any).output?.[0]?.content?.[0]?.text || resp);
 
-    if (!rawText || typeof rawText !== "string")
-      throw new Error("OpenAI returned no text content");
-
-    let data: any;
+    let data: any = {};
     try {
-      data = JSON.parse(rawText);
+      data = JSON.parse(outputText);
     } catch {
-      const cleaned = String(rawText)
-        .replace(/^[\s`]*\{/, "{")
-        .replace(/\}[\s`]*$/, "}");
-      data = JSON.parse(cleaned);
+      throw new Error("Model returned non-JSON output");
     }
 
-    send("progress", { value: (progress = Math.max(progress, 95)) });
-
+    // 4) attach screenshots etc.
     const result = {
+      url,
+      title: title || undefined,
       ...data,
-      sections_detected: sections,
-      page: { url, title },
-      assets: {
-        screenshot_url: screenshotUrl,
-        screenshot_url_backup: screenshotBackup,
-        suggested_screenshot_url: screenshotUrl,
+      screenshots: {
+        hero: shots.primary || shots.backup || null,
+      },
+      meta: {
+        sections_detected: sections,
       },
     };
 
@@ -284,11 +264,11 @@ ${text}`;
     send("progress", { value: 100 });
     res.end();
   } catch (e: any) {
-    send("error", { message: e?.message || "stream failed" });
+    sendEvent(res, "error", { message: e?.message || "stream failed" });
     res.end();
   } finally {
-    clearInterval(tick);
-    clearInterval(heartbeat);
+    clearInterval(tick as any);
+    clearInterval(heartbeat as any);
   }
 }
 
