@@ -1,8 +1,14 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import Landing from "./Landing";
-import { analyzeUrl } from "./lib/analyze"; // tava jau esošā funkcija (free/full)
+import FullReportView from "./components/FullReportView";
+import { analyzeUrl } from "./lib/analyze"; // jau esošā funkcija (free/full)
 
 export default function App() {
+  // --- vienkārša SPA routēšana pēc path ---
+  const pathname =
+    typeof window !== "undefined" ? window.location.pathname : "/";
+
+  // --- state priekš Free testa (kā Tev bija) ---
   const [freeReport, setFreeReport] = useState<any | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -10,7 +16,7 @@ export default function App() {
     try {
       setRunning(true);
       setFreeReport(null);
-      // sūtām FREE režīmā, lai parādās Free Report rezultāti uz main lapas
+      // FREE režīms -> parādām Free Report uz galvenās lapas
       const data = await analyzeUrl(url, "free");
       setFreeReport(data);
     } catch (e) {
@@ -22,22 +28,29 @@ export default function App() {
   }
 
   function handleOrderFull() {
-    // DEV plūsma: atveram Full Report lapu ar to pašu URL (ja bija)
+    // Ja ir pēdējais notestētais URL, atveram /full ar autostartu
     const url = freeReport?.url ? freeReport.url : "";
     const base = typeof window !== "undefined" ? window.location.origin : "";
     if (url) {
-      window.location.href = `${base}/full?url=${encodeURIComponent(url)}`;
+      window.location.href = `${base}/full?autostart=1&url=${encodeURIComponent(
+        url
+      )}`;
     } else {
       window.location.href = `${base}/full`;
     }
   }
 
   function handleSeeSample() {
-    // var atvērt gatavu sample, vai to pašu /full ar parametru ?sample=1
     const base = typeof window !== "undefined" ? window.location.origin : "";
     window.location.href = `${base}/full?sample=1`;
   }
 
+  // --- /full maršruts -> renderējam FullReportView (tur jau ir autostarts no query) ---
+  if (pathname === "/full") {
+    return <FullReportView />;
+  }
+
+  // --- Citādi -> Landing (kā līdz šim) ---
   return (
     <Landing
       freeReport={freeReport}
