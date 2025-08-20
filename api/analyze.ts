@@ -1,264 +1,120 @@
-// api/analyze.ts
-const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
+// src/lib/analyze.ts
+// ✅ Lokāli tipi + klienta palīgi Full/Free reportam.
+// ❌ Nekādus importus no /api/* te nevajag (tie nav TypeScript moduļi).
 
-type AnalyzeData = {
-  finalUrl?: string;
-  url?: string;
-  fetchedAt?: string;
-  httpStatus?: number;
-  meta?: {
-    title?: string;
-    description?: string;
-    lang?: string;
-    viewport?: string;
-    canonical?: string;
-  };
-  seo?: {
-    h1Count?: number;
-    h2Count?: number;
-    h3Count?: number;
-    canonicalPresent?: boolean;
-    metaDescriptionPresent?: boolean;
-  };
-  social?: {
-    og?: Record<string, string | undefined>;
-    twitter?: Record<string, string | undefined>;
-  };
-  links?: { total?: number; internal?: number; external?: number };
-  images?: { total?: number; missingAlt?: number };
-  robots?: {
-    robotsTxtUrl?: string;
-    robotsTxtOk?: boolean | null;
-    sitemapUrlGuess?: string;
-    sitemapOk?: boolean | null;
-  };
-  headingsOutline?: Array<{ tag: string; text: string }>;
+export type Impact = "low" | "medium" | "high";
+
+export type Suggestion = {
+  title: string;
+  impact: Impact;
+  recommendation: string;
 };
 
-function ok(res: any, obj: any) {
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  res.end(JSON.stringify(obj));
-}
-function bad(res: any, code: number, message: string) {
-  res.statusCode = code;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify({ ok: false, error: message }));
-}
-function normalizeUrl(u: string) {
-  const s = (u || "").trim();
+export type ContentAuditItem = {
+  section: string; // "Hero", "Value Prop", ...
+  present: boolean;
+  quality: "good" | "poor";
+  suggestion?: string;
+};
+
+export type BacklogItem = {
+  title: string;
+  impact?: number; // 1..3
+  effort_days?: number;
+  eta_days?: number;
+  notes?: string;
+  lift_percent?: number; // ≈ +x% leads emblēmai
+};
+
+export type FullReport = {
+  page?: { url?: string; title?: string };
+  assets?: { screenshot_url?: string | null };
+  screenshots?: { hero?: string | null };
+  sections_detected?: Record<
+    | "hero"
+    | "value_prop"
+    | "social_proof"
+    | "pricing"
+    | "features"
+    | "faq"
+    | "contact"
+    | "footer",
+    boolean
+  >;
+  quick_wins?: string[];
+  prioritized_backlog?: BacklogItem[];
+  findings?: Suggestion[];
+  content_audit?: ContentAuditItem[];
+
+  // bagātināšanas lauki
+  meta?: any;
+  seo?: any;
+  images?: any;
+  links?: any;
+  social?: any;
+  robots?: any;
+  text_snippets?: string;
+
+  score?: number;
+};
+
+/* ───────────────── helpers ───────────────── */
+
+function normalizeUrl(input: string): string {
+  const s = (input || "").trim();
   if (!s) return "";
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
 }
-async function fetchText(u: string) {
-  const r = await fetch(u, { headers: { "user-agent": UA } });
-  const text = await r.text();
-  return { status: r.status, url: r.url, text };
-}
-function extract(html: string, re: RegExp) {
-  const m = html.match(re);
-  return m ? m[1]?.trim() : undefined;
-}
-function stripTags(s: string) {
-  return s
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function parseHeadings(html: string) {
-  const out: Array<{ tag: string; text: string }> = [];
-  const re = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)))
-    out.push({ tag: m[1].toLowerCase(), text: stripTags(m[2]) });
-  return out;
-}
-function countTags(html: string, tag: string) {
-  const re = new RegExp(`<${tag}\\b`, "gi");
-  const matches = html.match(re);
-  return matches ? matches.length : 0;
-}
-function countImgsMissingAlt(html: string) {
-  const imgRe = /<img\b[^>]*>/gi;
-  let m: RegExpExecArray | null;
-  let total = 0;
-  let missing = 0;
-  while ((m = imgRe.exec(html))) {
-    total++;
-    const tag = m[0];
-    const altMatch = tag.match(/\balt\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i);
-    const ariaHidden = /\baria-hidden\s*=\s*("true"|'true'|true)/i.test(tag);
-    const rolePresent = /\brole\s*=\s*("presentation"|'presentation')/i.test(
-      tag
-    );
-    const altVal = altMatch
-      ? (altMatch[2] || altMatch[3] || altMatch[4] || "").trim()
-      : undefined;
-    const isMissing = !altVal && !ariaHidden && !rolePresent;
-    if (isMissing) missing++;
-  }
-  return { total, missing };
-}
-function countLinks(html: string, baseHost: string | null) {
-  const aRe = /<a\b[^>]*href\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))/gi;
-  let m: RegExpExecArray | null;
-  let total = 0;
-  let internal = 0;
-  let external = 0;
-  while ((m = aRe.exec(html))) {
-    total++;
-    const href = m[2] || m[3] || m[4] || "";
+
+async function getJson<T = any>(path: string): Promise<T> {
+  const r = await fetch(path, { method: "GET" });
+  if (!r.ok) {
+    let err = `HTTP ${r.status}`;
     try {
-      if (
-        !href ||
-        href.startsWith("#") ||
-        href.startsWith("mailto:") ||
-        href.startsWith("tel:")
-      )
-        continue;
-      if (href.startsWith("/")) internal++;
-      else if (/^https?:\/\//i.test(href)) {
-        const u = new URL(href);
-        if (baseHost && u.host === baseHost) internal++;
-        else external++;
-      } else internal++; // relative
+      const j = await r.json();
+      if (j?.error) err = j.error;
     } catch {}
+    throw new Error(err);
   }
-  return { total, internal, external };
+  return (await r.json()) as T;
 }
-async function fetchHead(url: string) {
-  try {
-    const r = await fetch(url, {
-      method: "GET",
-      headers: { "user-agent": UA },
-    });
-    return r.status >= 200 && r.status < 400;
-  } catch {
-    return false;
+
+/* ─────────────── publiskās funkcijas ─────────────── */
+
+/**
+ * Bezmaksas analīze (izmanto Free reportā, ja vajag).
+ * Atgriež to pašu struktūru, ko sūta /api/analyze: { ok, data }.
+ */
+export async function analyzeUrl(url: string, mode: "free" | "full" = "free") {
+  const u = normalizeUrl(url);
+  if (!u) throw new Error("Missing URL");
+
+  if (mode === "free") {
+    const res = await getJson<{ ok: boolean; data?: any; error?: string }>(
+      `/api/analyze?url=${encodeURIComponent(u)}`
+    );
+    if (!res.ok) throw new Error(res.error || "Analyze failed");
+    return res.data;
   }
-}
-function readBody(req: any): Promise<any> {
-  return new Promise((resolve) => {
-    let buf = "";
-    req.on("data", (c: Buffer) => (buf += c.toString("utf8")));
-    req.on("end", () => {
-      try {
-        resolve(buf ? JSON.parse(buf) : {});
-      } catch {
-        resolve({});
-      }
-    });
-  });
+
+  // Full režīmu parasti lasām ar SSE /api/analyze-stream (UI pusē).
+  return { url: u };
 }
 
-export default async function handler(req: any, res: any) {
+/**
+ * Saderīgs alias (dažviet projektā tiek saukts runAnalyze).
+ * Atgriež { ok: true, data } vai { ok: false, error }.
+ */
+export async function runAnalyze(
+  url: string
+): Promise<{ ok: boolean; data?: any; error?: string }> {
   try {
-    const method = (req.method || "GET").toUpperCase();
-    const body = method === "POST" ? await readBody(req) : null;
-    const qUrl = (req.query?.url as string) || (body?.url as string) || "";
-    const url = normalizeUrl(qUrl);
-    if (!url) return bad(res, 400, "Missing URL");
-
-    const { status, url: finalUrl, text: html } = await fetchText(url);
-
-    const lang = extract(html, /<html[^>]+lang\s*=\s*["']?([a-zA-Z-]+)[^>]*>/i);
-    const title = extract(html, /<title>([\s\S]*?)<\/title>/i);
-    const description =
-      extract(
-        html,
-        /<meta\s+name=["']description["']\s+content=["']([\s\S]*?)["'][^>]*>/i
-      ) ||
-      extract(
-        html,
-        /<meta\s+property=["']og:description["']\s+content=["']([\s\S]*?)["'][^>]*>/i
-      );
-    const viewport = extract(
-      html,
-      /<meta\s+name=["']viewport["']\s+content=["']([\s\S]*?)["'][^>]*>/i
-    );
-    const canonical = extract(
-      html,
-      /<link\s+rel=["']canonical["']\s+href=["']([^"']+)["'][^>]*>/i
-    );
-
-    const og: Record<string, string | undefined> = {};
-    const tw: Record<string, string | undefined> = {};
-    const metaPairs = html.match(/<meta[^>]+>/gi) || [];
-    for (const tag of metaPairs) {
-      const prop =
-        (tag.match(/\bproperty\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
-        (tag.match(/\bproperty\s*=\s*('([^']+)')/i) || [])[2];
-      const name =
-        (tag.match(/\bname\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
-        (tag.match(/\bname\s*=\s*('([^']+)')/i) || [])[2];
-      const content =
-        (tag.match(/\bcontent\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
-        (tag.match(/\bcontent\s*=\s*('([^']+)')/i) || [])[2];
-      const key = (prop || name || "").toLowerCase();
-      if (key.startsWith("og:")) og[key] = content;
-      if (key.startsWith("twitter:")) tw[key] = content;
-    }
-
-    const headingsOutline = parseHeadings(html);
-    const h1Count = countTags(html, "h1");
-    const h2Count = countTags(html, "h2");
-    const h3Count = countTags(html, "h3");
-    const { total: imgTotal, missing: missingAlt } = countImgsMissingAlt(html);
-
-    const baseHost = (() => {
-      try {
-        const u = new URL(finalUrl || url);
-        return u.host;
-      } catch {
-        return null;
-      }
-    })();
-    const { total: linkTotal, internal, external } = countLinks(html, baseHost);
-
-    const origin = (() => {
-      try {
-        const u = new URL(finalUrl || url);
-        return `${u.protocol}//${u.host}`;
-      } catch {
-        return null;
-      }
-    })();
-
-    let robotsTxtOk: boolean | null = null;
-    let sitemapOk: boolean | null = null;
-    let robotsTxtUrl: string | undefined;
-    let sitemapUrlGuess: string | undefined;
-    if (origin) {
-      robotsTxtUrl = `${origin}/robots.txt`;
-      sitemapUrlGuess = `${origin}/sitemap.xml`;
-      robotsTxtOk = await fetchHead(robotsTxtUrl);
-      sitemapOk = await fetchHead(sitemapUrlGuess);
-    }
-
-    const data: AnalyzeData = {
-      finalUrl,
-      url,
-      fetchedAt: new Date().toISOString(),
-      httpStatus: status,
-      meta: { title, description, lang, viewport, canonical },
-      seo: {
-        h1Count,
-        h2Count,
-        h3Count,
-        canonicalPresent: !!canonical,
-        metaDescriptionPresent: !!description,
-      },
-      social: { og, twitter: tw },
-      links: { total: linkTotal, internal, external },
-      images: { total: imgTotal, missingAlt },
-      robots: { robotsTxtUrl, robotsTxtOk, sitemapUrlGuess, sitemapOk },
-      headingsOutline,
-    };
-
-    return ok(res, { ok: true, data });
+    const data = await analyzeUrl(url, "free");
+    return { ok: true, data };
   } catch (e: any) {
-    console.error(e);
-    return bad(res, 500, e?.message || "Analyze failed");
+    return { ok: false, error: e?.message || "Analyze failed" };
   }
 }
+
+/* ─────────────── noderīgs eksports ─────────────── */
+export const utils = { normalizeUrl };
