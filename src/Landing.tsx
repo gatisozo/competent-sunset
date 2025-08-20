@@ -5,7 +5,7 @@ import Features from "./components/Features";
 import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
 
-// ✅ pievienojam reālās analīzes klientu
+// ✅ reālās analīzes klients
 import { runAnalyze } from "./lib/analyzeClient";
 
 type LandingProps = {
@@ -46,6 +46,8 @@ type AnalyzeData = {
     sitemapUrlGuess?: string;
     sitemapOk?: boolean | null;
   };
+  // API parasti sūta arī šo:
+  // headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
 function safePct(n?: number) {
@@ -74,71 +76,16 @@ export default function Landing({
   const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
 
-  // ✅ reālie dati + aprēķinātie skori
+  // ✅ reālie dati + skori
   const [data, setData] = useState<AnalyzeData | null>(null);
-  const [overallScore, setOverallScore] = useState<number>(73); // default kā iepriekš
-  const [structurePct, setStructurePct] = useState<number>(76); // default kā iepriekš
-  const [contentPct, setContentPct] = useState<number>(70); // default kā iepriekš
+  const [overallScore, setOverallScore] = useState<number>(73); // default
+  const [structurePct, setStructurePct] = useState<number>(76); // default
+  const [contentPct, setContentPct] = useState<number>(70); // default
 
   const previewRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // --- Demo “UI” saraksti atstājam, tos nedaram dinamiskus šajā solī ---
-  const sectionsPresent = [
-    { title: "hero", ok: true },
-    { title: "social proof", ok: true },
-    { title: "features", ok: true },
-    { title: "contact", ok: true },
-    { title: "value prop", ok: true },
-    { title: "pricing", ok: false },
-    { title: "faq", ok: true },
-    { title: "footer", ok: true },
-  ];
-  const quickWins: { text: string; upliftPct: number }[] = [
-    { text: "Add testimonials to build credibility.", upliftPct: 6 },
-    { text: "Improve navigation structure for ease of access.", upliftPct: 4 },
-    { text: "Enhance FAQ section with clearer formatting.", upliftPct: 3 },
-  ];
-  const backlog = [
-    {
-      title: "Revise Hero Section Copy",
-      impact: "high",
-      effort: "2d",
-      upliftPct: 20,
-    },
-    {
-      title: "Integrate Testimonials",
-      impact: "med",
-      effort: "3d",
-      upliftPct: 10,
-    },
-    {
-      title: "Enhance FAQ Section",
-      impact: "med",
-      effort: "2d",
-      upliftPct: 10,
-    },
-    {
-      title: "Add Pricing Information",
-      impact: "low",
-      effort: "4d",
-      upliftPct: 5,
-    },
-    {
-      title: "Improve Navigation Flow",
-      impact: "high",
-      effort: "3d",
-      upliftPct: 20,
-    },
-  ];
-
-  const heroShot = "/report-1.png";
-  const shotExists = true;
-
-  const normalizeUrl = (u: string) =>
-    u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
-
-  // ✅ score aprēķins no reālajiem datiem (minimāli invazīvs)
+  // ===== score no reālajiem datiem (minimāls) =====
   const computeScores = (d: AnalyzeData | null) => {
     if (!d) return { overall: 0, structure: 0, content: 0 };
     let score = 50;
@@ -166,7 +113,6 @@ export default function Landing({
     if (d.robots?.robotsTxtOk) score += 3;
     if (d.robots?.sitemapOk) score += 3;
 
-    // vienkārši sub-score
     let structure = 30;
     structure += Math.min(20, (d.seo?.h2Count ?? 0) * 4);
     structure += d.seo?.canonicalPresent ? 10 : 0;
@@ -185,7 +131,277 @@ export default function Landing({
     return { overall: score, structure, content };
   };
 
-  // ===== progress animācija (līdz ~90% kamēr gaidām) =====
+  // ===== Heuristikas 3 TABIEM no reālajiem datiem =====
+  const derived = useMemo(() => {
+    if (!data) {
+      return {
+        sections: [] as { title: string; ok: boolean; why?: string }[],
+        quickWins: [] as { text: string; upliftPct: number }[],
+        backlog: [] as {
+          title: string;
+          impact: "low" | "med" | "high";
+          effort: string;
+          upliftPct: number;
+        }[],
+      };
+    }
+
+    const ho: Array<{ tag: string; text: string }> =
+      (data as any).headingsOutline ?? []; // ja API sūta
+    const headingsText = ho.map((h) => h.text?.toLowerCase() || "").join(" | ");
+    const hHas = (kw: string | RegExp) =>
+      typeof kw === "string"
+        ? headingsText.includes(kw.toLowerCase())
+        : kw.test(headingsText);
+
+    const metaTitle = (data.meta?.title || "").toLowerCase();
+    const metaDesc = (data.meta?.description || "").toLowerCase();
+    const metaText = `${metaTitle} ${metaDesc}`;
+
+    // ---- Sections Present (heuristikas) ----
+    const sections: { title: string; ok: boolean; why?: string }[] = [];
+
+    // Hero: pieņemam, ka ir, ja ir vismaz 1 H1 vai metaTitle
+    const heroOk = (data.seo?.h1Count ?? 0) >= 1 || !!metaTitle;
+    sections.push({
+      title: "hero",
+      ok: heroOk,
+      why: heroOk ? "Found H1/meta title" : "No clear H1/title",
+    });
+
+    // Social proof: heading satur 'testimonials', 'reviews', 'clients', 'trusted by' u.tml.
+    const socialOk = hHas(
+      /testimonial|review|clients|trusted|partners|logos?/i
+    );
+    sections.push({
+      title: "social proof",
+      ok: !!socialOk,
+      why: socialOk
+        ? "Headings mention social proof"
+        : "No testimonials/reviews headings",
+    });
+
+    // Features: H2/H3 satur 'features'/'benefits'
+    const featuresOk = hHas(/feature|benefit|what you get|capabilit(y|ies)/i);
+    sections.push({
+      title: "features",
+      ok: !!featuresOk,
+      why: featuresOk ? "Headings mention features" : "No features headings",
+    });
+
+    // Contact: heading satur 'contact', 'get in touch', 'support'
+    const contactOk = hHas(/contact|get in touch|support|help/i);
+    sections.push({
+      title: "contact",
+      ok: !!contactOk,
+      why: contactOk ? "Found contact-related heading" : "No contact heading",
+    });
+
+    // Value prop: meta title/description saprātīga (desc >= 50 simboli) vai H1 ar “we help/our product/solution”
+    const valuePropOk =
+      (data.meta?.description?.length ?? 0) >= 50 ||
+      hHas(/we help|we (are|do)|our (product|solution)|why (choose|us)/i);
+    sections.push({
+      title: "value prop",
+      ok: !!valuePropOk,
+      why: valuePropOk
+        ? "Meta/heading describes value"
+        : "Weak value statement",
+    });
+
+    // Pricing: heading satur 'pricing', 'plans'
+    const pricingOk = hHas(/pricing|price|plans?/i);
+    sections.push({
+      title: "pricing",
+      ok: !!pricingOk,
+      why: pricingOk ? "Found pricing/plans heading" : "No pricing section",
+    });
+
+    // FAQ
+    const faqOk = hHas(/faq|frequently asked|questions/i);
+    sections.push({
+      title: "faq",
+      ok: !!faqOk,
+      why: faqOk ? "Found FAQ heading" : "No FAQ heading",
+    });
+
+    // Footer: konservatīvi — ja iekš linkiem ir ≥8 un ir “privacy” vai “terms” kāds no headingiem
+    const footerOk =
+      (data.links?.total ?? 0) >= 8 &&
+      (hHas(/privacy|terms/i) ||
+        metaText.includes("privacy") ||
+        metaText.includes("terms"));
+    sections.push({
+      title: "footer",
+      ok: !!footerOk,
+      why: footerOk ? "Likely footer links" : "Footer not detected",
+    });
+
+    // ---- Quick Wins (top-3 pēc ietekmes) ----
+    type Win = { text: string; uplift: number; key: string };
+    const wins: Win[] = [];
+
+    if (!data.seo?.metaDescriptionPresent) {
+      wins.push({
+        key: "meta-desc",
+        uplift: 8,
+        text: "Add a unique meta description (140–160 chars).",
+      });
+    } else if ((data.meta?.description?.length ?? 0) < 80) {
+      wins.push({
+        key: "meta-desc-short",
+        uplift: 5,
+        text: "Enrich the meta description to ~150 chars with a clear value prop.",
+      });
+    }
+
+    if ((data.seo?.h1Count ?? 0) !== 1) {
+      wins.push({
+        key: "h1-count",
+        uplift: 6,
+        text: "Ensure exactly one H1 that matches the primary intent.",
+      });
+    }
+
+    if (!data.seo?.canonicalPresent) {
+      wins.push({
+        key: "canonical",
+        uplift: 4,
+        text: "Add a canonical URL to prevent duplicate content issues.",
+      });
+    }
+
+    const imgs = data.images?.total ?? 0;
+    const miss = data.images?.missingAlt ?? 0;
+    if (imgs > 0 && miss > 0) {
+      const ratio = Math.round((miss / Math.max(1, imgs)) * 100);
+      wins.push({
+        key: "alt",
+        uplift: 5,
+        text: `Add ALT text to images (missing on ~${ratio}% images).`,
+      });
+    }
+
+    if (!data.robots?.robotsTxtOk) {
+      wins.push({
+        key: "robots",
+        uplift: 3,
+        text: "Publish /robots.txt to control crawler access.",
+      });
+    }
+    if (!data.robots?.sitemapOk) {
+      wins.push({
+        key: "sitemap",
+        uplift: 3,
+        text: "Publish /sitemap.xml and reference it in robots.txt.",
+      });
+    }
+
+    if ((data.links?.total ?? 0) < 5) {
+      wins.push({
+        key: "internal-links",
+        uplift: 4,
+        text: "Add internal links to key pages (min. 5).",
+      });
+    }
+
+    // If no obvious social tags:
+    const ogCount = Object.values(data.social?.og ?? {}).filter(Boolean).length;
+    const twCount = Object.values(data.social?.twitter ?? {}).filter(
+      Boolean
+    ).length;
+    if (ogCount + twCount < 3) {
+      wins.push({
+        key: "social-tags",
+        uplift: 3,
+        text: "Add OpenGraph/Twitter meta tags for rich sharing.",
+      });
+    }
+
+    const quickWins = wins
+      .sort((a, b) => b.uplift - a.uplift)
+      .slice(0, 3)
+      .map((w) => ({ text: w.text, upliftPct: w.uplift }));
+
+    // ---- Prioritized Backlog (no quick wins + papildinājumi) ----
+    type Task = {
+      title: string;
+      impact: "low" | "med" | "high";
+      effort: string;
+      uplift: number;
+      key: string;
+    };
+    const backlogAll: Task[] = [];
+
+    // Mapējam no wins ar aptuveniem effortiem
+    const effortFor = (key: string): string =>
+      ((
+        {
+          "meta-desc": "1–2h",
+          "meta-desc-short": "1h",
+          "h1-count": "1–2h",
+          canonical: "1h",
+          alt: "2–4h",
+          robots: "1h",
+          sitemap: "1–2h",
+          "internal-links": "2–4h",
+          "social-tags": "1–2h",
+        } as Record<string, string>
+      )[key] || "1–2h");
+
+    const impactFor = (uplift: number): "low" | "med" | "high" =>
+      uplift >= 6 ? "high" : uplift >= 4 ? "med" : "low";
+
+    for (const w of wins) {
+      backlogAll.push({
+        key: w.key,
+        title: w.text,
+        impact: impactFor(w.uplift),
+        effort: effortFor(w.key),
+        uplift: w.uplift,
+      });
+    }
+
+    // Papildus uzdevumi pēc headings (ja trūkst sekciju)
+    if (!pricingOk)
+      backlogAll.push({
+        key: "pricing-sec",
+        title: "Add a clear Pricing/Plans section.",
+        impact: "med",
+        effort: "1–2d",
+        uplift: 6,
+      });
+    if (!faqOk)
+      backlogAll.push({
+        key: "faq-sec",
+        title: "Add an FAQ section to address objections.",
+        impact: "med",
+        effort: "0.5–1d",
+        uplift: 4,
+      });
+    if (!socialOk)
+      backlogAll.push({
+        key: "social-proof-sec",
+        title: "Add testimonials or client logos for trust.",
+        impact: "high",
+        effort: "1–2d",
+        uplift: 8,
+      });
+
+    const backlog = backlogAll
+      .sort((a, b) => b.uplift - a.uplift)
+      .slice(0, 6)
+      .map((t) => ({
+        title: t.title,
+        impact: t.impact,
+        effort: t.effort,
+        upliftPct: t.uplift,
+      }));
+
+    return { sections, quickWins, backlog };
+  }, [data]);
+
+  // ===== progress animācija =====
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -205,7 +421,10 @@ export default function Landing({
     rafRef.current = requestAnimationFrame(tick);
   }
 
-  // ===== reāls tests (AIZVIETO demo runTestDemo) =====
+  // ===== reāls tests =====
+  const normalizeUrl = (u: string) =>
+    u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
+
   const runTestReal = async () => {
     if (!url.trim()) return;
     const normalized = normalizeUrl(url);
@@ -219,14 +438,12 @@ export default function Landing({
     setData(null);
     startProgress();
 
-    // opc. callback
     if (onRunTest) {
       try {
         await Promise.resolve(onRunTest(normalized));
       } catch {}
     }
 
-    // reālais API izsaukums
     const res = await runAnalyze(normalized);
     setLoading(false);
 
@@ -258,7 +475,7 @@ export default function Landing({
     runTestReal();
   };
 
-  // === DEV workflow → Full report ar autostartu un pēdējo testēto URL ===
+  // === DEV → Full report links ===
   const resolvedAuditUrl =
     lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
   const orderFullInternal = () => {
@@ -274,7 +491,7 @@ export default function Landing({
     window.location.href = href;
   };
 
-  // ---- Tab helpers ----
+  // ---- UI helpers ----
   const TabButton = ({ name }: { name: string }) => (
     <button
       type="button"
@@ -309,7 +526,6 @@ export default function Landing({
     </div>
   );
 
-  // mazs helpers reālo datu īsai rindiņai
   const niceUrl = useMemo(
     () => (data ? data.finalUrl || data.url || "" : ""),
     [data]
@@ -450,7 +666,7 @@ export default function Landing({
           </div>
         ) : (
           <>
-            {/* Grade + sub-scores (tagad no reāliem datiem) */}
+            {/* Grade + sub-scores (no reāliem datiem) */}
             <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
               <div className="rounded-2xl border bg-white p-5 md:p-6">
                 <div className="flex items-center justify-between">
@@ -472,7 +688,7 @@ export default function Landing({
                   <span className="ml-3 text-slate-500">Grade (auto)</span>
                 </div>
 
-                {/* ✅ īss kopsavilkums no reālajiem datiem */}
+                {/* Reālo datu īss kopsavilkums */}
                 {data && (
                   <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm text-slate-700">
                     <div className="rounded-xl border p-3">
@@ -568,7 +784,7 @@ export default function Landing({
               </div>
             </div>
 
-            {/* TABI (paliek kā iepriekš; trīs blur tab joprojām lock uz Full report) */}
+            {/* ======= TABS ======= */}
             <div className="mt-6">
               <div className="flex gap-2 pl-2">
                 {[
@@ -580,46 +796,64 @@ export default function Landing({
                   "Content Audit",
                   "Copy Suggestions",
                 ].map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setActiveTab(t)}
-                    className={
-                      "px-4 py-2 rounded-t-xl text-sm border " +
-                      (activeTab === t
-                        ? "bg-white border-slate-200 font-medium"
-                        : "bg-slate-100/60 text-slate-700 border-transparent hover:bg-white")
-                    }
-                  >
-                    {t}
-                  </button>
+                  <TabButton key={t} name={t} />
                 ))}
               </div>
 
               <div className="border border-t-0 rounded-b-xl bg-white p-4">
-                {/* OVERALL tab saturu jau redzi iepriekš; pārējie paliek tādi paši kā bija */}
+                {/* --- Sections Present: balstīts uz reāliem datiem --- */}
                 {activeTab === "Sections Present" && (
                   <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-                    {sectionsPresent.map((s, i) => (
-                      <div
-                        key={i}
-                        className="flex items-center gap-2 rounded-lg border px-3 py-2"
-                      >
-                        <span
-                          className={
-                            "h-2 w-2 rounded-full " +
-                            (s.ok ? "bg-emerald-500" : "bg-rose-500")
-                          }
-                        />
-                        <span className="text-sm">{s.title}</span>
+                    {(derived.sections.length
+                      ? derived.sections
+                      : [
+                          { title: "hero", ok: true },
+                          { title: "social proof", ok: false },
+                          { title: "features", ok: false },
+                          { title: "contact", ok: false },
+                          { title: "value prop", ok: false },
+                          { title: "pricing", ok: false },
+                          { title: "faq", ok: false },
+                          { title: "footer", ok: false },
+                        ]
+                    ).map((s, i) => (
+                      <div key={i} className="rounded-lg border px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={
+                              "h-2 w-2 rounded-full " +
+                              (s.ok ? "bg-emerald-500" : "bg-rose-500")
+                            }
+                          />
+                          <span className="text-sm font-medium">{s.title}</span>
+                        </div>
+                        {s.why && (
+                          <div className="mt-1 text-xs text-slate-500">
+                            {s.why}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
 
+                {/* --- Quick Wins: top-3 no reālajiem datiem --- */}
                 {activeTab === "Quick Wins" && (
                   <ul className="space-y-2">
-                    {quickWins.map((q, i) => (
+                    {(derived.quickWins.length
+                      ? derived.quickWins
+                      : [
+                          {
+                            text: "Add a unique meta description (140–160 chars).",
+                            upliftPct: 6,
+                          },
+                          {
+                            text: "Ensure exactly one H1 that matches the primary intent.",
+                            upliftPct: 5,
+                          },
+                          { text: "Add ALT text to images.", upliftPct: 4 },
+                        ]
+                    ).map((q, i) => (
                       <li
                         key={i}
                         className="flex items-start justify-between gap-3 rounded-xl border p-3"
@@ -633,9 +867,32 @@ export default function Landing({
                   </ul>
                 )}
 
+                {/* --- Backlog: prioritizēts pēc ietekmes, ar effort --- */}
                 {activeTab === "Prioritized Backlog" && (
                   <div className="grid md:grid-cols-2 gap-3">
-                    {backlog.map((b, i) => (
+                    {(derived.backlog.length
+                      ? derived.backlog
+                      : [
+                          {
+                            title: "Add a canonical URL",
+                            impact: "med",
+                            effort: "1h",
+                            upliftPct: 4,
+                          },
+                          {
+                            title: "Publish /sitemap.xml",
+                            impact: "med",
+                            effort: "1–2h",
+                            upliftPct: 3,
+                          },
+                          {
+                            title: "Add ALT text to images",
+                            impact: "med",
+                            effort: "2–4h",
+                            upliftPct: 5,
+                          },
+                        ]
+                    ).map((b, i) => (
                       <div key={i} className="rounded-xl border p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -665,27 +922,13 @@ export default function Landing({
                   </div>
                 )}
 
+                {/* Pārējie tab saglabājas kā iepriekš */}
                 {BLUR_TABS.has(activeTab) && (
-                  <div className="relative">
-                    <div className="pointer-events-none select-none blur-sm">
-                      <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
-                        {activeTab}
-                      </div>
+                  <BlurPanel>
+                    <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
+                      {activeTab}
                     </div>
-                    <div className="absolute inset-0 grid place-items-center">
-                      <div className="rounded-xl bg-white/80 backdrop-blur border px-5 py-4 text-center shadow-sm">
-                        <div className="text-sm text-slate-700">
-                          Detailed view available in the Full Audit.
-                        </div>
-                        <button
-                          onClick={onOrderFull ?? orderFullInternal}
-                          className="mt-3 rounded-lg px-4 py-2 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
-                        >
-                          Order Full Audit
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  </BlurPanel>
                 )}
               </div>
             </div>
@@ -728,7 +971,7 @@ export default function Landing({
         <Features onPrimaryClick={handleRun} />
       </div>
 
-      {/* FULL REPORT (zem Features) */}
+      {/* FULL REPORT */}
       <section className="mx-auto max-w-[1200px] px-4 py-12">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
           <div>
