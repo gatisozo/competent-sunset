@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  type FullReport,
+  type FullReport as ApiFullReport,
   type Suggestion,
   type ContentAuditItem,
+  type BacklogItem,
 } from "../lib/analyze";
 
 /* ---------------- utilities ---------------- */
@@ -45,6 +46,7 @@ const heroCropImg: React.CSSProperties = {
   objectFit: "cover",
   objectPosition: "top",
 };
+
 function isHeroFinding(title: string) {
   const t = title.toLowerCase();
   return (
@@ -55,12 +57,22 @@ function isHeroFinding(title: string) {
     t.includes("primary button")
   );
 }
+
+function auditStatus(
+  c: ContentAuditItem | undefined
+): "ok" | "weak" | "missing" {
+  if (!c) return "ok";
+  if (c.present === false) return "missing";
+  if (c.quality === "poor") return "weak";
+  return "ok";
+}
+
 function hasMeaningfulIssues(
   findings: { title: string }[] = [],
-  audit?: { section: string; status: "ok" | "weak" | "missing" }[]
+  audit?: ContentAuditItem[]
 ) {
   const hf = findings.some((f) => isHeroFinding(f.title));
-  const wk = (audit || []).some((c) => c.status !== "ok");
+  const wk = (audit || []).some((c) => auditStatus(c) !== "ok");
   return hf || wk;
 }
 
@@ -72,177 +84,151 @@ function computeScore(
   let score = 100;
   for (const f of findings)
     score -= f.impact === "high" ? 10 : f.impact === "medium" ? 5 : 2;
-  for (const c of audit)
-    score -= c.status === "missing" ? 5 : c.status === "weak" ? 2 : 0;
+  for (const c of audit) {
+    const st = auditStatus(c);
+    score -= st === "missing" ? 5 : st === "weak" ? 2 : 0;
+  }
   return clamp(Math.round(score), 0, 100);
 }
-const impactToLift: Record<number, string> = {
-  3: "≈ +20% leads",
-  2: "≈ +10% leads",
-  1: "≈ +5% leads",
-};
+function scoreBarColor(n: number) {
+  if (n >= 80) return "bg-emerald-500";
+  if (n >= 60) return "bg-amber-500";
+  return "bg-rose-500";
+}
 
-/* -------------- smart screenshot (spinner + retry + backup) -------------- */
-function useSmartScreenshot(primary?: string | null, backup?: string | null) {
-  const [src, setSrc] = useState<string | null>(primary || null);
-  const [loading, setLoading] = useState<boolean>(!!primary);
+/* -------------- screenshot URL handling -------------- */
+function buildScreenshotUrl(target: string) {
+  const url = /^https?:\/\//i.test(target) ? target : `https://${target}`;
+  const tmpl =
+    (import.meta as any).env?.VITE_SCREENSHOT_URL_TMPL ||
+    (typeof process !== "undefined" &&
+      (process as any).env?.SCREENSHOT_URL_TMPL);
+  if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
+  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
+}
+function withCacheBuster(u: string) {
+  const sep = u.includes("?") ? "&" : "?";
+  return `${u}${sep}cb=${Date.now()}`;
+}
+function useSmartImage(
+  primary?: string | null,
+  backup?: string | null
+): {
+  src?: string;
+  loading: boolean;
+  onLoad: (e?: any) => void;
+  onError: () => void;
+} {
+  const [src, setSrc] = useState<string | undefined>(
+    primary || backup || undefined
+  );
+  const [loading, setLoading] = useState<boolean>(!!src);
   const [retries, setRetries] = useState(0);
-  const MAX_RETRIES = 6;
+  const MAX_RETRIES = 4;
 
   useEffect(() => {
-    setSrc(primary || null);
-    setLoading(!!primary);
+    setSrc(primary || backup || undefined);
+    setLoading(!!(primary || backup));
     setRetries(0);
-  }, [primary]);
+  }, [primary, backup]);
 
-  const appendCb = (u: string) => {
-    try {
-      const url = new URL(u);
-      url.searchParams.set("cb", String(Date.now()));
-      return url.toString();
-    } catch {
-      return u + (u.includes("?") ? "&" : "?") + "cb=" + Date.now();
-    }
-  };
-
-  const onLoad: React.ReactEventHandler<HTMLImageElement> = (e) => {
-    const img = e.currentTarget;
-    const isTiny = img.naturalWidth <= 300 || img.naturalHeight <= 200;
-    const looksGif = (src || "").toLowerCase().includes(".gif");
-
-    if ((isTiny || looksGif) && retries < MAX_RETRIES && src) {
-      setTimeout(() => {
-        setSrc(appendCb(src));
-        setRetries((r) => r + 1);
-      }, 1500);
-      return;
-    }
-    setLoading(false);
-  };
-
+  const onLoad = () => setLoading(false);
   const onError = () => {
     if (backup && src !== backup) {
-      setSrc(appendCb(backup));
+      setSrc(withCacheBuster(backup));
       setLoading(true);
       return;
     }
     if (src && retries < MAX_RETRIES) {
-      setSrc(appendCb(src));
+      setSrc(withCacheBuster(src));
       setRetries((r) => r + 1);
     } else {
       setLoading(false);
     }
   };
-
   return { src, loading, onLoad, onError };
 }
 
-/* -------------- component -------------- */
+/* -------------- main component -------------- */
 export default function FullReportView() {
-  const [url, setUrl] = useState<string>(() => getQS("url") || "");
+  const autostart = getQS("autostart") === "1";
+  const qUrl = getQS("url") || "";
+
+  const [url, setUrl] = useState<string>(qUrl ? qUrl : "");
+  const [report, setReport] = useState<ApiFullReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string>("");
-  const [report, setReport] = useState<FullReport | null>(null);
-  const [displayScore, setDisplayScore] = useState(0);
+  const [score, setScore] = useState(0);
 
-  // analyze on load only if url exists in QS
-  useEffect(() => {
-    const qsUrl = getQS("url");
-    if (qsUrl) startStreaming(qsUrl, "full");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const heroPrimary = useMemo(
+    () =>
+      (report?.screenshots?.hero ?? report?.assets?.screenshot_url) ||
+      (url ? buildScreenshotUrl(url) : undefined),
+    [report?.screenshots?.hero, report?.assets?.screenshot_url, url]
+  );
+  const heroImg = useSmartImage(heroPrimary || undefined, undefined);
 
-  // re-animate score when report arrives
-  useEffect(() => {
-    if (!report) return;
-    const target = computeScore(report.findings, report.content_audit || []);
-    animateNumber(setDisplayScore, displayScore, target, 900);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [report]);
+  function startStream(u: string, mode: "full" | "free" = "full") {
+    const target = /^https?:\/\//i.test(u) ? u : `https://${u}`;
+    setLoading(true);
+    setProgress(0);
+    setReport(null);
 
-  /* ---------- streaming ---------- */
-  function startStreaming(u: string, mode: "free" | "full" = "full") {
-    try {
-      setLoading(true);
-      setError("");
-      setProgress(0);
-      setReport(null);
+    const src = `/api/analyze-stream?url=${encodeURIComponent(
+      target
+    )}&mode=${mode}&sid=${Date.now()}`;
 
-      const base = "/api/analyze-stream";
-      const src = `${base}?url=${encodeURIComponent(
-        u
-      )}&mode=${mode}&sid=${Date.now()}`;
+    const es = new EventSource(src);
 
-      const es = new EventSource(src);
+    es.addEventListener("progress", (e: any) => {
+      try {
+        const { value } = JSON.parse(e.data);
+        setProgress(value ?? 0);
+      } catch {}
+    });
 
-      es.addEventListener("progress", (e: any) => {
-        try {
-          const { value } = JSON.parse(e.data);
-          setProgress(value ?? 0);
-        } catch {}
-      });
-      es.addEventListener("result", (e: any) => {
-        try {
-          const data = JSON.parse(e.data);
-          setReport(data);
-          setProgress(100);
-        } catch (err: any) {
-          setError("Invalid result format");
-        } finally {
-          es.close();
-          setLoading(false);
-        }
-      });
-      es.addEventListener("error", (e: any) => {
-        try {
-          const data = e.data ? JSON.parse(e.data) : null;
-          setError(data?.message || "Stream error");
-        } catch {
-          setError("Stream error");
-        } finally {
-          es.close();
-          setLoading(false);
-        }
-      });
-      es.onerror = () => {
-        /* handled above */
-      };
-    } catch (err: any) {
-      setError(err?.message || "Could not start stream");
+    es.addEventListener("result", (e: any) => {
+      try {
+        const data = JSON.parse(e.data) as ApiFullReport;
+        setReport(data);
+        setProgress(100);
+
+        const baseScore =
+          typeof (data as any).score === "number"
+            ? (data as any).score!
+            : computeScore(
+                (data as any).findings || [],
+                (data as any).content_audit || []
+              );
+        animateNumber(setScore, 0, baseScore, 800);
+      } catch (err: any) {
+        console.error(err);
+        alert("Invalid result format");
+      } finally {
+        es.close();
+        setLoading(false);
+      }
+    });
+
+    es.addEventListener("error", (e: any) => {
+      try {
+        const data = e.data ? JSON.parse(e.data) : null;
+        console.error("stream error", data || e);
+      } catch {}
+      es.close();
       setLoading(false);
-    }
+      alert("Stream failed.");
+    });
   }
 
-  /* ---------- handlers ---------- */
-  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && url.trim()) startStreaming(url.trim(), "full");
-  };
-  const runAnalyze = () => {
-    if (url.trim()) startStreaming(url.trim(), "full");
-  };
+  useEffect(() => {
+    if (autostart && qUrl) {
+      startStream(qUrl, "full");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autostart, qUrl]);
 
-  /* ---------- derived ---------- */
-  const findings = (report?.findings || []) as Suggestion[];
-  const contentAudit = report?.content_audit as ContentAuditItem[] | undefined;
-
-  const screenshotUrl = report?.assets?.screenshot_url || null;
-  const screenshotBackup =
-    (report as any)?.assets?.screenshot_url_backup || null;
-  const suggestedShot = report?.assets?.suggested_screenshot_url || null;
-
-  const shot = useSmartScreenshot(screenshotUrl, screenshotBackup);
-
-  const topHeroSuggestions = useMemo(() => {
-    const heroOnes = findings.filter((f) => isHeroFinding(f.title));
-    return (heroOnes.length ? heroOnes : findings).slice(0, 3);
-  }, [findings]);
-
-  // Quick-wins overall lift = 3% per item (cap 30%) — visible big pill
-  const quickWinsLiftPct = useMemo(() => {
-    const n = report?.quick_wins?.length ?? 0;
-    return Math.min(30, n * 3);
-  }, [report?.quick_wins]);
+  const gradeLetter = letterFromScore(score);
 
   return (
     <div className="mx-auto max-w-6xl px-3 md:px-4 py-8">
@@ -271,13 +257,16 @@ export default function FullReportView() {
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={onKey}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && url.trim())
+                startStream(url.trim(), "full");
+            }}
             placeholder="yourdomain.com"
             className="flex-1 rounded-lg px-3 py-2 bg-white border outline-none focus:ring-2 focus:ring-[#83C5BE]"
           />
           <button
             disabled={loading || !url.trim()}
-            onClick={runAnalyze}
+            onClick={() => startStream(url.trim(), "full")}
             className="rounded-lg px-4 py-2 bg-[#006D77] text-white disabled:opacity-60"
           >
             {loading ? "Analyzing…" : "Analyze"}
@@ -295,158 +284,134 @@ export default function FullReportView() {
         )}
       </div>
 
-      {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 text-red-700 p-3 text-sm">
-          {error}
-        </div>
-      )}
-
       {/* Main grid */}
       <div className="grid md:grid-cols-3 gap-4">
         {/* Left: page + hero visual + findings */}
         <div className="md:col-span-2 space-y-4">
           {/* Page meta */}
-          {report?.page && (
+          {(report as any)?.page && (
             <div className="rounded-xl border bg-white p-3">
               <div className="text-xs text-slate-500">URL</div>
-              <div className="truncate">{report.page.url}</div>
-              {report.page.title && (
+              <div className="truncate">{(report as any).page.url}</div>
+              {(report as any).page.title && (
                 <>
                   <div className="mt-2 text-xs text-slate-500">Title</div>
-                  <div className="">{report.page.title}</div>
+                  <div className="">{(report as any).page.title}</div>
                 </>
               )}
             </div>
           )}
 
           {/* Visual: hero snapshot (cropped) */}
-          {hasMeaningfulIssues(findings, contentAudit) && screenshotUrl && (
-            <div className="rounded-xl border bg-white p-3">
-              <div className="font-medium">Hero Snapshot (top of page)</div>
-              <div className="text-sm text-slate-600">
-                Cropped to the first viewport for clarity. Suggestions overlay
-                shows the most impactful fixes.
+          {hasMeaningfulIssues(
+            ((report as any)?.findings || []) as Suggestion[],
+            report?.content_audit as ContentAuditItem[] | undefined
+          ) &&
+            heroPrimary && (
+              <div className="rounded-xl border bg-white p-3">
+                <div className="font-medium">Hero Snapshot (top of page)</div>
+                <div className="text-sm text-slate-600">
+                  Cropped to the first viewport for clarity.
+                </div>
+
+                <div className={`${heroCropWrap} relative mt-2`}>
+                  {/* Spinner overlay while loading */}
+                  {heroImg.loading && (
+                    <div className="absolute inset-0 grid place-items-center bg-white/60">
+                      <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
+                    </div>
+                  )}
+
+                  {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                  <img
+                    src={heroImg.src || heroPrimary}
+                    style={heroCropImg}
+                    onLoad={heroImg.onLoad}
+                    onError={heroImg.onError}
+                    className={heroImg.loading ? "opacity-0" : "opacity-100"}
+                  />
+                </div>
+
+                <div className="mt-1 text-xs text-slate-500">
+                  * We show screenshots only for sections with issues. Currently
+                  cropping to the hero area.
+                </div>
               </div>
-
-              <div className={`${heroCropWrap} relative mt-2`}>
-                {/* Spinner overlay while loading */}
-                {shot.loading && (
-                  <div className="absolute inset-0 grid place-items-center bg-white/60">
-                    <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
-                  </div>
-                )}
-
-                {/* eslint-disable-next-line jsx-a11y/alt-text */}
-                <img
-                  src={shot.src || undefined}
-                  style={heroCropImg}
-                  onLoad={shot.onLoad}
-                  onError={shot.onError}
-                  className={
-                    shot.loading
-                      ? "opacity-0 transition-opacity duration-300"
-                      : "opacity-100 transition-opacity duration-300"
-                  }
-                />
-
-                {/* Overlay: top hero suggestions */}
-                {topHeroSuggestions.length > 0 && (
-                  <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
-                    <div className="font-medium mb-1">Top hero suggestions</div>
-                    <ul className="space-y-1">
-                      {topHeroSuggestions.map((s, i) => (
-                        <li key={i}>
-                          • <b>{s.title}</b> — {s.recommendation}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-1 text-xs text-slate-500">
-                * We show screenshots only for sections with issues. Currently
-                cropping to the hero area.
-              </div>
-            </div>
-          )}
+            )}
 
           {/* Findings list */}
-          {findings.length > 0 && (
-            <div className="rounded-xl border bg-white p-3">
-              <div className="font-medium mb-2">Findings</div>
-              <div className="grid gap-3">
-                {findings.map((f, i) => (
-                  <div
-                    key={i}
-                    className="p-4 rounded-lg border bg-white flex items-start gap-3"
-                  >
-                    <div className="pt-1">
-                      <span
-                        className={clsx(
-                          "px-2 py-0.5 rounded text-xs font-medium",
-                          f.impact === "high" && "bg-red-100 text-red-700",
-                          f.impact === "medium" &&
-                            "bg-amber-100 text-amber-700",
-                          f.impact === "low" &&
-                            "bg-emerald-100 text-emerald-700"
-                        )}
-                      >
-                        {(f.impact || "low").toUpperCase()}
-                      </span>
-                    </div>
-                    <div>
-                      <div className="font-medium">{f.title}</div>
-                      <div className="text-sm text-slate-600 mt-1">
-                        {f.recommendation}
+          {Array.isArray((report as any)?.findings) &&
+            (report as any).findings.length > 0 && (
+              <div className="rounded-xl border bg-white p-3">
+                <div className="font-medium mb-2">Findings</div>
+                <div className="grid gap-3">
+                  {((report as any).findings as Suggestion[]).map((f, i) => (
+                    <div
+                      key={i}
+                      className="p-4 rounded-lg border bg-white flex items-start gap-3"
+                    >
+                      <div className="pt-1">
+                        <span
+                          className={clsx(
+                            "px-2 py-0.5 rounded text-xs font-medium",
+                            f.impact === "high" && "bg-red-100 text-red-700",
+                            f.impact === "medium" &&
+                              "bg-amber-100 text-amber-700",
+                            f.impact === "low" &&
+                              "bg-emerald-100 text-emerald-700"
+                          )}
+                        >
+                          {(f.impact || "low").toUpperCase()}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="font-medium">{f.title}</div>
+                        <div className="text-sm text-slate-600 mt-1">
+                          {f.recommendation}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           {/* Content audit */}
-          {contentAudit && contentAudit.length > 0 && (
-            <div className="rounded-xl border bg-white p-3">
-              <div className="font-medium mb-2">Content Audit</div>
-              <div className="grid gap-3">
-                {contentAudit.map((c, i) => (
-                  <div key={i} className="p-4 rounded-lg border bg-white">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium capitalize">
-                        {c.section.replace(/_/g, " ")}
-                      </span>
-                      <span
-                        className={clsx(
-                          "text-xs px-2 py-0.5 rounded",
-                          c.status === "ok" &&
-                            "bg-emerald-100 text-emerald-700",
-                          c.status === "weak" && "bg-amber-100 text-amber-700",
-                          c.status === "missing" && "bg-red-100 text-red-700"
+          {Array.isArray(report?.content_audit) &&
+            report!.content_audit!.length > 0 && (
+              <div className="rounded-xl border bg-white p-3">
+                <div className="font-medium mb-2">Content Audit</div>
+                <div className="grid gap-3">
+                  {(report!.content_audit as ContentAuditItem[]).map((c, i) => {
+                    const st = auditStatus(c);
+                    return (
+                      <div key={i} className="p-4 rounded-lg border bg-white">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium capitalize">
+                            {c.section.replace(/_/g, " ")}
+                          </span>
+                          <span
+                            className={clsx(
+                              "text-xs px-2 py-0.5 rounded",
+                              st === "ok" && "bg-emerald-100 text-emerald-700",
+                              st === "weak" && "bg-amber-100 text-amber-700",
+                              st === "missing" && "bg-red-100 text-red-700"
+                            )}
+                          >
+                            {st}
+                          </span>
+                        </div>
+                        {c.suggestion && (
+                          <div className="text-sm text-slate-600 mt-1">
+                            {c.suggestion}
+                          </div>
                         )}
-                      >
-                        {c.status}
-                      </span>
-                    </div>
-                    {c.rationale && (
-                      <div className="text-sm text-slate-600 mt-1">
-                        {c.rationale}
                       </div>
-                    )}
-                    {c.suggestions && c.suggestions.length > 0 && (
-                      <ul className="text-sm text-slate-700 mt-2 list-disc pl-5">
-                        {c.suggestions.map((s, j) => (
-                          <li key={j}>{s}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ))}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </div>
 
         {/* Right: score + sections + quick wins + backlog */}
@@ -456,11 +421,11 @@ export default function FullReportView() {
             <div className="text-sm text-slate-600">Score</div>
             <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
               <div
-                className="h-full bg-[#006D77]"
-                style={{ width: `${clamp(displayScore, 0, 100)}%` }}
+                className={clsx("h-full", scoreBarColor(Math.round(score)))}
+                style={{ width: `${clamp(score, 0, 100)}%` }}
               />
             </div>
-            <div className="mt-1 text-sm">{Math.round(displayScore)} / 100</div>
+            <div className="mt-1 text-sm">{Math.round(score)} / 100</div>
             {loading && (
               <div className="mt-1 text-xs text-slate-500">
                 Streaming analysis…
@@ -488,15 +453,10 @@ export default function FullReportView() {
             </div>
           )}
 
-          {/* Quick wins + overall lift */}
+          {/* Quick wins */}
           {report?.quick_wins && report.quick_wins.length > 0 && (
             <div className="rounded-xl border bg-white p-3">
-              <div className="flex items-center justify-between">
-                <div className="font-medium">Quick Wins</div>
-                <div className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
-                  ≈ +{quickWinsLiftPct}% leads (if all done)
-                </div>
-              </div>
+              <div className="font-medium">Quick Wins</div>
               <ul className="text-sm text-slate-700 list-disc pl-5 mt-2">
                 {report.quick_wins.map((q, i) => (
                   <li key={i}>{q}</li>
@@ -505,36 +465,41 @@ export default function FullReportView() {
             </div>
           )}
 
-          {/* Backlog with big conversion-lift badges */}
+          {/* Backlog */}
           {report?.prioritized_backlog &&
             report.prioritized_backlog.length > 0 && (
               <div className="rounded-xl border bg-white p-3">
                 <div className="font-medium mb-2">Prioritized Backlog</div>
                 <div className="space-y-3">
-                  {report.prioritized_backlog.map((b, i) => (
+                  {(report.prioritized_backlog as BacklogItem[]).map((b, i) => (
                     <div key={i} className="border rounded-lg p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium">{b.title}</div>
-                        <span className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
-                          {impactToLift[b.impact] || "Potential lift"}
-                        </span>
+                        {"lift_percent" in (b as any) &&
+                          typeof (b as any).lift_percent === "number" && (
+                            <span className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                              ≈ +{(b as any).lift_percent}% leads
+                            </span>
+                          )}
                       </div>
                       <div className="mt-2 text-xs text-slate-600 flex flex-wrap items-center gap-2">
-                        <span className="px-2 py-0.5 rounded bg-slate-100">
-                          Impact {b.impact}
+                        <span className="px-2 py-0.5 rounded bg-slate-100 capitalize">
+                          impact {String((b as any).impact || "").toLowerCase()}
                         </span>
-                        <span className="px-2 py-0.5 rounded bg-slate-100">
-                          Effort {b.effort}
-                        </span>
-                        {"eta_days" in b && (
+                        {"effort_days" in (b as any) && (
                           <span className="px-2 py-0.5 rounded bg-slate-100">
-                            {b.eta_days}d
+                            effort {(b as any).effort_days}d
+                          </span>
+                        )}
+                        {"eta_days" in (b as any) && (
+                          <span className="px-2 py-0.5 rounded bg-slate-100">
+                            ETA {(b as any).eta_days}d
                           </span>
                         )}
                       </div>
-                      {b.notes && (
+                      {"notes" in (b as any) && (b as any).notes && (
                         <div className="mt-1 text-sm text-slate-600">
-                          {b.notes}
+                          {(b as any).notes}
                         </div>
                       )}
                     </div>
@@ -546,4 +511,13 @@ export default function FullReportView() {
       </div>
     </div>
   );
+}
+
+/* ---------------- grade badge helper ---------------- */
+function letterFromScore(n: number) {
+  if (n >= 90) return "A";
+  if (n >= 80) return "B";
+  if (n >= 70) return "C";
+  if (n >= 60) return "D";
+  return "E";
 }
