@@ -1,45 +1,76 @@
 // src/lib/analyzeClient.ts
 // Klienta helpers Free reportam (Landing/FreeReport).
-// Saglabā veco API formu: runAnalyze(url, signal?) -> { ok, data? , error? }
+// Atgriež { ok: true, data } / { ok: false, error } un nekad nemet SyntaxError,
+// ja serveris atbild ar HTML vai citu ne-JSON satura tipu.
+
+export type AnalyzeResponse =
+  | { ok: true; data: any }
+  | { ok: false; error: string; code?: string };
 
 function normalizeUrl(input: string): string {
-  const s = (input || "").trim();
-  if (!s) return "";
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
+  let s = (input ?? "").trim();
+  if (!s) return s;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    if (!["http:", "https:"].includes(u.protocol)) throw new Error();
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return s;
+  }
 }
 
 export async function runAnalyze(
-  url: string,
+  input: string,
   signal?: AbortSignal
-): Promise<{ ok: boolean; data?: any; error?: string }> {
-  try {
-    const u = normalizeUrl(url);
-    if (!u) throw new Error("Missing URL");
+): Promise<AnalyzeResponse> {
+  const url = normalizeUrl(input);
 
-    const r = await fetch(`/api/analyze?url=${encodeURIComponent(u)}`, {
+  try {
+    const r = await fetch(`/api/analyze?url=${encodeURIComponent(url)}`, {
       method: "GET",
       signal,
-      headers: { "cache-control": "no-store" },
+      headers: {
+        accept: "application/json",
+        "cache-control": "no-store",
+      },
     });
 
-    // mēģinām nolasīt JSON neatkarīgi no statusa
-    let j: any = {};
-    try {
-      j = await r.json();
-    } catch {
-      /* ignore */
+    // mēģinām saprast, vai atbilde vispār ir JSON
+    const ctype = r.headers.get("content-type") || "";
+    const isJson = ctype.includes("application/json");
+
+    if (!r.ok) {
+      // mēģinām izvilkt kļūdas ziņu no JSON, ja tāds ir
+      if (isJson) {
+        try {
+          const j = await r.json();
+          const msg =
+            j?.error || j?.message || `Analyze failed (HTTP ${r.status})`;
+          return { ok: false, error: String(msg) };
+        } catch {
+          /* fall through */
+        }
+      }
+      // ne-JSON kļūda (piem., Vercel HTML “A server error has occurred”)
+      return { ok: false, error: `Analyze failed (HTTP ${r.status})` };
     }
 
-    if (!r.ok || j?.ok === false) {
-      throw new Error(j?.error || `Analyze failed (HTTP ${r.status})`);
+    // 2xx – ja JSON, atgriežam to; citādi kļūda
+    if (isJson) {
+      const j = await r.json();
+      // sagaidām /api/analyze atbildi formā { ok, data?, error? }
+      if (j && j.ok) return { ok: true, data: j.data };
+      return { ok: false, error: j?.error || "Analyze failed" };
     }
 
-    return { ok: true, data: j.data };
+    return { ok: false, error: "Analyze failed: unexpected response type" };
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      return { ok: false, error: "Request aborted" };
+      return { ok: false, error: "Request aborted", code: "ABORTED" };
     }
-    return { ok: false, error: e?.message || "Analyze failed" };
+    return { ok: false, error: e?.message || "Network error" };
   }
 }
 
