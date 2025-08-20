@@ -53,7 +53,6 @@ function normalizeUrl(input: string): URL {
   }
   return u;
 }
-
 function stripTags(s: string): string {
   return s
     .replace(/<[^>]*>/g, "")
@@ -77,22 +76,22 @@ function attrOf(tag: string, name: string): string | undefined {
   const m = new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i").exec(tag);
   return m?.[2] ?? m?.[3] ?? undefined;
 }
-
-async function safeHeadOrGet(url: string, init?: RequestInit) {
+async function headOrGetOk(url: string, init?: RequestInit) {
   try {
     let r = await fetch(url, { method: "HEAD", redirect: "follow", ...init });
-    if (r.ok) return { ok: true };
+    if (r.ok) return true;
     r = await fetch(url, { method: "GET", redirect: "follow", ...init });
-    return { ok: r.ok };
+    return r.ok;
   } catch {
-    return { ok: false };
+    return false;
   }
 }
 
 export default async function handler(req: Request): Promise<Response> {
   try {
-    const { searchParams } = new URL(req.url);
     const method = req.method.toUpperCase();
+    const { searchParams } = new URL(req.url);
+
     let inputUrl = searchParams.get("url") ?? "";
     if (method === "POST" && !inputUrl) {
       const body = await req.json().catch(() => ({} as any));
@@ -114,7 +113,7 @@ export default async function handler(req: Request): Promise<Response> {
       });
     }
 
-    // Fetch (15s timeout)
+    // Fetch page (timeout 15s)
     const controller = new AbortController();
     const tm = setTimeout(() => controller.abort(), 15000);
     const ua =
@@ -147,27 +146,24 @@ export default async function handler(req: Request): Promise<Response> {
 
     const status = resp.status;
     const html = await resp.text();
-    const headChunk = html.slice(0, 200_000);
+    const head = html.slice(0, 200_000);
 
-    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(headChunk)?.[1];
-    const getMeta = (n: string) => {
+    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(head);
+    const title = titleMatch ? stripTags(titleMatch[1]) : undefined;
+    const metaContent = (n: string) => {
       const re = new RegExp(
         `<meta[^>]+(?:name|property)\\s*=\\s*["']${n}["'][^>]*?(?:content\\s*=\\s*("([^"]*)"|'([^']*)'))?[^>]*>`,
         "i"
       );
-      const m = re.exec(headChunk);
+      const m = re.exec(head);
       return (m?.[2] ?? m?.[3])?.trim();
     };
-    const description = getMeta("description");
-    const viewport = getMeta("viewport");
-    const canonical = /<link[^>]+rel\s*=\s*["']canonical["'][^>]*>/i.exec(
-      headChunk
-    )
-      ? attrOf(
-          /<link[^>]+rel\s*=\s*["']canonical["'][^>]*>/i.exec(headChunk)![0],
-          "href"
-        )
-      : undefined;
+    const description = metaContent("description");
+    const viewport = metaContent("viewport");
+    const canonical = (() => {
+      const m = /<link[^>]+rel\s*=\s*["']canonical["'][^>]*>/i.exec(head);
+      return m ? attrOf(m[0], "href") : undefined;
+    })();
 
     const htmlTag = /<html[^>]*>/i.exec(html)?.[0] ?? "";
     const lang = attrOf(htmlTag, "lang");
@@ -179,7 +175,7 @@ export default async function handler(req: Request): Promise<Response> {
       "og:url",
       "og:type",
     ].reduce(
-      (a, k) => ((a[k] = getMeta(k)), a),
+      (acc, k) => ((acc[k] = metaContent(k)), acc),
       {} as Record<string, string | undefined>
     );
     const twitter = [
@@ -188,7 +184,7 @@ export default async function handler(req: Request): Promise<Response> {
       "twitter:description",
       "twitter:image",
     ].reduce(
-      (a, k) => ((a[k] = getMeta(k)), a),
+      (acc, k) => ((acc[k] = metaContent(k)), acc),
       {} as Record<string, string | undefined>
     );
 
@@ -203,51 +199,48 @@ export default async function handler(req: Request): Promise<Response> {
     const h2Count = headings.filter((h) => h.tag === "h2").length;
     const h3Count = headings.filter((h) => h.tag === "h3").length;
 
+    // Links
     const origin = new URL(resp.url).origin;
-    const aTags = extractBetween(html, "<a", ">");
-    let total = 0,
-      internal = 0,
-      external = 0;
-    for (const raw of aTags) {
+    const aChunks = extractBetween(html, "<a", ">");
+    let linksTotal = 0,
+      linksInternal = 0,
+      linksExternal = 0;
+    for (const raw of aChunks) {
       const tag = "<a" + raw + ">";
       const href = attrOf(tag, "href");
       if (!href) continue;
-      total++;
+      linksTotal++;
       try {
         const u = new URL(href, origin);
-        if (u.origin === origin) internal++;
-        else external++;
+        if (u.origin === origin) linksInternal++;
+        else linksExternal++;
       } catch {}
     }
 
-    const imgTags = extractBetween(html, "<img", ">");
+    // Images
+    const imgChunks = extractBetween(html, "<img", ">");
     let imgTotal = 0,
       imgMissingAlt = 0;
-    for (const raw of imgTags) {
+    for (const raw of imgChunks) {
       const tag = "<img" + raw + ">";
       imgTotal++;
       const alt = attrOf(tag, "alt");
       if (!alt || !alt.trim()) imgMissingAlt++;
     }
 
+    // robots/sitemap (best effort)
     const site = new URL(resp.url);
     const robotsTxtUrl = `${site.origin}/robots.txt`;
-    const sitemapUrlGuess = `${site.origin}/sitemap.xml`;
-    const robotsTxtOk = (await safeHeadOrGet(robotsTxtUrl)).ok;
-    const sitemapOk = (await safeHeadOrGet(sitemapUrlGuess)).ok;
+    const sitemapGuess = `${site.origin}/sitemap.xml`;
+    const robotsTxtOk = await headOrGetOk(robotsTxtUrl);
+    const sitemapOk = await headOrGetOk(sitemapGuess);
 
     const data: AnalyzeResult = {
       url: target.toString(),
       finalUrl: resp.url,
       fetchedAt: new Date().toISOString(),
       httpStatus: status,
-      meta: {
-        title: title ? stripTags(title) : undefined,
-        description,
-        lang,
-        viewport,
-        canonical,
-      },
+      meta: { title, description, lang, viewport, canonical },
       seo: {
         h1Count,
         h2Count,
@@ -256,12 +249,16 @@ export default async function handler(req: Request): Promise<Response> {
         metaDescriptionPresent: !!description && description.length > 0,
       },
       social: { og, twitter },
-      links: { total, internal, external },
+      links: {
+        total: linksTotal,
+        internal: linksInternal,
+        external: linksExternal,
+      },
       images: { total: imgTotal, missingAlt: imgMissingAlt },
       robots: {
         robotsTxtUrl,
         robotsTxtOk,
-        sitemapUrlGuess,
+        sitemapUrlGuess: sitemapGuess,
         sitemapOk,
       },
       headingsOutline: headings,

@@ -1,23 +1,23 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from 'react';
 
 type Step = { label: string; at: number };
 
 const DEFAULT_STEPS: Step[] = [
-  { label: "Starting", at: 5 },
-  { label: "Fetching", at: 25 },
-  { label: "Parsing", at: 60 },
-  { label: "Scoring", at: 85 },
-  { label: "Done", at: 100 },
+  { label: 'Starting', at: 5 },
+  { label: 'Fetching', at: 25 },
+  { label: 'Parsing', at: 60 },
+  { label: 'Scoring', at: 85 },
+  { label: 'Done', at: 100 },
 ];
 
 export function StatusBar({ active }: { active: boolean }) {
   const [pct, setPct] = useState(0);
-  const [label, setLabel] = useState("Starting");
+  const [label, setLabel] = useState('Starting');
 
   useEffect(() => {
     if (!active) {
       setPct(100);
-      setLabel("Done");
+      setLabel('Done');
       return;
     }
     let mounted = true;
@@ -35,19 +35,12 @@ export function StatusBar({ active }: { active: boolean }) {
   }, [active]);
 
   useEffect(() => {
-    // ES2019-compatible: reverse+find (nevis findLast)
     const steps = DEFAULT_STEPS;
-    const current: Step | undefined = steps
-      .slice()
-      .reverse()
-      .find((s: Step) => pct >= s.at);
+    const current: Step | undefined = steps.slice().reverse().find((s: Step) => pct >= s.at);
     if (current) setLabel(current.label);
   }, [pct]);
 
-  const barStyle = useMemo(
-    () => ({ width: `${pct}%`, transition: "width 200ms linear" }),
-    [pct]
-  );
+  const barStyle = useMemo(() => ({ width: `${pct}%`, transition: 'width 200ms linear' }), [pct]);
 
   return (
     <div className="w-full">

@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { runAnalyze } from '../lib/analyzeClient';
-import { StatusBar } from './StatusBar';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { runAnalyze } from "../lib/analyzeClient";
+import { StatusBar } from "./StatusBar";
 
 type AnalyzeData = {
   finalUrl?: string;
@@ -37,13 +37,14 @@ type AnalyzeData = {
 };
 
 function normalizeUrl(input: string): string {
-  let s = (input ?? '').trim();
+  let s = (input ?? "").trim();
   if (!s) return s;
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
   try {
     const u = new URL(s);
-    if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol');
-    u.hash = '';
+    if (!["http:", "https:"].includes(u.protocol))
+      throw new Error("bad protocol");
+    u.hash = "";
     return u.toString();
   } catch {
     return s;
@@ -51,12 +52,13 @@ function normalizeUrl(input: string): string {
 }
 
 function safePct(n?: number) {
-  if (typeof n === 'number' && isFinite(n)) return Math.max(0, Math.min(100, n));
+  if (typeof n === "number" && isFinite(n))
+    return Math.max(0, Math.min(100, n));
   return 0;
 }
 
 export default function FreeReport() {
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AnalyzeData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -64,7 +66,6 @@ export default function FreeReport() {
   const abortRef = useRef<AbortController | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // -------- scoring no reālajiem datiem (minimāls) --------
   const scores = useMemo(() => {
     const d = data;
     if (!d) return { overall: 0, structure: 0, content: 0 };
@@ -76,7 +77,9 @@ export default function FreeReport() {
     if ((d.seo?.h2Count ?? 0) >= 2) score += 4;
 
     const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
-    const twCount = Object.values(d.social?.twitter ?? {}).filter(Boolean).length;
+    const twCount = Object.values(d.social?.twitter ?? {}).filter(
+      Boolean
+    ).length;
     score += Math.min(ogCount + twCount, 6);
 
     const imgs = d.images?.total ?? 0;
@@ -98,15 +101,17 @@ export default function FreeReport() {
 
     let content = 30;
     content += d.seo?.metaDescriptionPresent ? 15 : 0;
-    content += Math.min(15, (imgs > 0 ? 10 : 0));
-    content += Math.min(10, (imgs > 0 ? Math.round(10 * ((imgs - miss) / Math.max(1, imgs))) : 0));
+    content += Math.min(15, imgs > 0 ? 10 : 0);
+    content += Math.min(
+      10,
+      imgs > 0 ? Math.round(10 * ((imgs - miss) / Math.max(1, imgs))) : 0
+    );
     content = Math.min(100, Math.max(0, content));
 
     score = Math.min(100, Math.max(0, score));
     return { overall: score, structure, content };
   }, [data]);
 
-  // -------- progress animācija --------
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -127,7 +132,6 @@ export default function FreeReport() {
     rafRef.current = requestAnimationFrame(tick);
   }
 
-  // -------- submit --------
   async function onAnalyze(e?: React.FormEvent) {
     e?.preventDefault();
     if (!input.trim()) return;
@@ -146,23 +150,28 @@ export default function FreeReport() {
     setLoading(false);
 
     if ((res as any).ok) {
-      const payload = (res as any).data as AnalyzeData;
-      setData(payload);
+      setData((res as any).data as AnalyzeData);
       setProgress(100);
     } else {
-      setErr((res as any).error || 'Analyze failed');
+      setErr((res as any).error || "Analyze failed");
       setProgress(0);
     }
   }
 
-  const niceUrl = useMemo(() => (data ? data.finalUrl || data.url || '' : ''), [data]);
+  const niceUrl = useMemo(
+    () => (data ? data.finalUrl || data.url || "" : ""),
+    [data]
+  );
 
   return (
     <div className="w-full border rounded-2xl p-4 md:p-6 bg-white">
       <h2 className="text-xl font-semibold mb-3">Free report</h2>
 
-      {/* Ievade */}
-      <form onSubmit={onAnalyze} className="flex flex-col md:flex-row gap-2 mb-4">
+      {/* Input */}
+      <form
+        onSubmit={onAnalyze}
+        className="flex flex-col md:flex-row gap-2 mb-4"
+      >
         <input
           className="flex-1 border rounded px-3 py-2"
           placeholder="piem., example.com vai https://example.com"
@@ -175,101 +184,145 @@ export default function FreeReport() {
           className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
           disabled={loading || !input.trim()}
         >
-          {loading ? 'Analyzing…' : 'Analyze'}
+          {loading ? "Analyzing…" : "Analyze"}
         </button>
       </form>
 
-      {/* Status bar */}
+      {/* Progress */}
       {loading && (
         <div className="mb-4">
           <StatusBar active={true} />
-          <div className="mt-2 text-sm text-gray-600">Progress: {Math.round(progress)}%</div>
+          <div className="mt-2 text-sm text-gray-600">
+            Progress: {Math.round(progress)}%
+          </div>
         </div>
       )}
 
-      {/* Kļūda */}
+      {/* Error */}
       {err && <p className="text-red-600 mb-4 text-sm">{err}</p>}
 
-      {/* Rezultāts */}
+      {/* Result */}
       {data && !loading && (
         <div className="space-y-4">
           <div className="text-sm text-gray-700">
-            <div><b>URL:</b> {niceUrl}</div>
-            <div><b>Fetched:</b> {data.fetchedAt ? new Date(data.fetchedAt).toLocaleString() : '—'}</div>
-            <div><b>HTTP status:</b> {data.httpStatus ?? '—'}</div>
-            <div><b>Language:</b> {data.meta?.lang ?? '—'}</div>
+            <div>
+              <b>URL:</b> {niceUrl}
+            </div>
+            <div>
+              <b>Fetched:</b>{" "}
+              {data.fetchedAt ? new Date(data.fetchedAt).toLocaleString() : "—"}
+            </div>
+            <div>
+              <b>HTTP status:</b> {data.httpStatus ?? "—"}
+            </div>
+            <div>
+              <b>Language:</b> {data.meta?.lang ?? "—"}
+            </div>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
             <section className="border rounded p-3">
               <h3 className="font-medium mb-1">Meta</h3>
               <ul className="text-sm list-disc pl-5">
-                <li><b>Title:</b> {data.meta?.title ?? '—'}</li>
                 <li>
-                  <b>Description:</b>{' '}
-                  {data.meta?.description
-                    ? `${data.meta.description.slice(0, 160)}${data.meta.description.length > 160 ? '…' : ''}`
-                    : '—'}
+                  <b>Title:</b> {data.meta?.title ?? "—"}
                 </li>
-                <li><b>Canonical:</b> {data.meta?.canonical ?? '—'}</li>
+                <li>
+                  <b>Description:</b>{" "}
+                  {data.meta?.description
+                    ? `${data.meta.description.slice(0, 160)}${
+                        data.meta.description.length > 160 ? "…" : ""
+                      }`
+                    : "—"}
+                </li>
+                <li>
+                  <b>Canonical:</b> {data.meta?.canonical ?? "—"}
+                </li>
               </ul>
             </section>
 
             <section className="border rounded p-3">
               <h3 className="font-medium mb-1">Headings</h3>
-              <p className="text-sm">H1 / H2 / H3: {data.seo?.h1Count ?? 0} / {data.seo?.h2Count ?? 0} / {data.seo?.h3Count ?? 0}</p>
+              <p className="text-sm">
+                H1 / H2 / H3: {data.seo?.h1Count ?? 0} /{" "}
+                {data.seo?.h2Count ?? 0} / {data.seo?.h3Count ?? 0}
+              </p>
             </section>
 
             <section className="border rounded p-3">
               <h3 className="font-medium mb-1">Links</h3>
-              <p className="text-sm">Total: {data.links?.total ?? 0} · Internal: {data.links?.internal ?? 0} · External: {data.links?.external ?? 0}</p>
+              <p className="text-sm">
+                Total: {data.links?.total ?? 0} · Internal:{" "}
+                {data.links?.internal ?? 0} · External:{" "}
+                {data.links?.external ?? 0}
+              </p>
             </section>
 
             <section className="border rounded p-3">
               <h3 className="font-medium mb-1">Images</h3>
-              <p className="text-sm">Total: {data.images?.total ?? 0} · Missing ALT: {data.images?.missingAlt ?? 0}</p>
+              <p className="text-sm">
+                Total: {data.images?.total ?? 0} · Missing ALT:{" "}
+                {data.images?.missingAlt ?? 0}
+              </p>
             </section>
 
             <section className="border rounded p-3 md:col-span-2">
               <h3 className="font-medium mb-1">Robots / Sitemap</h3>
               <ul className="list-disc pl-5 text-sm">
                 <li>
-                  <b>robots.txt:</b>{' '}
+                  <b>robots.txt:</b>{" "}
                   {data.robots?.robotsTxtOk === null
-                    ? 'n/a'
+                    ? "n/a"
                     : data.robots?.robotsTxtOk
-                    ? 'OK'
-                    : 'Not found'}
+                    ? "OK"
+                    : "Not found"}
                 </li>
                 <li>
-                  <b>sitemap:</b>{' '}
-                  {data.robots?.sitemapOk === null ? 'n/a' : data.robots?.sitemapOk ? 'OK' : 'Not found'}
+                  <b>sitemap:</b>{" "}
+                  {data.robots?.sitemapOk === null
+                    ? "n/a"
+                    : data.robots?.sitemapOk
+                    ? "OK"
+                    : "Not found"}
                 </li>
               </ul>
             </section>
           </div>
 
-          {/* Vienkāršs score kopsavilkums */}
+          {/* Vienkāršs score vizuāli */}
           <section className="border rounded p-3">
             <h3 className="font-medium mb-1">Score (auto)</h3>
             <div className="text-sm">
               <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                <div className="h-full bg-black" style={{ width: `${safePct(scores.overall)}%` }} />
+                <div
+                  className="h-full bg-black"
+                  style={{ width: `${safePct(scores.overall)}%` }}
+                />
               </div>
-              <div className="mt-2">Overall: {safePct(scores.overall)} / 100</div>
+              <div className="mt-2">
+                Overall: {safePct(scores.overall)} / 100
+              </div>
 
               <div className="mt-3 grid sm:grid-cols-2 gap-3">
                 <div>
                   <div className="text-xs text-gray-600">Structure</div>
                   <div className="mt-1 h-2 rounded-full bg-slate-200 overflow-hidden">
-                    <div className="h-full bg-gray-800" style={{ width: `${safePct(scores.structure)}%` }} />
+                    <div
+                      className="h-full bg-gray-800"
+                      style={{ width: `${safePct(scores.structure)}%` }}
+                    />
                   </div>
-                  <div className="text-xs mt-1">{safePct(scores.structure)}%</div>
+                  <div className="text-xs mt-1">
+                    {safePct(scores.structure)}%
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-600">Content</div>
                   <div className="mt-1 h-2 rounded-full bg-slate-200 overflow-hidden">
-                    <div className="h-full bg-gray-800" style={{ width: `${safePct(scores.content)}%` }} />
+                    <div
+                      className="h-full bg-gray-800"
+                      style={{ width: `${safePct(scores.content)}%` }}
+                    />
                   </div>
                   <div className="text-xs mt-1">{safePct(scores.content)}%</div>
                 </div>
