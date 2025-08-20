@@ -1,5 +1,4 @@
-// src/components/StatusBar.tsx
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 type Step = { label: string; at: number };
 
@@ -15,7 +14,6 @@ export function StatusBar({ active }: { active: boolean }) {
   const [pct, setPct] = useState(0);
   const [label, setLabel] = useState("Starting");
 
-  // Plūdena animācija līdz 90% gaidīšanas laikā; uz 100% — kad active=false
   useEffect(() => {
     if (!active) {
       setPct(100);
@@ -26,7 +24,7 @@ export function StatusBar({ active }: { active: boolean }) {
     let p = 0;
     const id = setInterval(() => {
       if (!mounted) return;
-      p = Math.min(p + Math.random() * 6 + 1, 90); // lēnām līdz ~90
+      p = Math.min(p + Math.random() * 6 + 1, 90);
       setPct(p);
     }, 300);
 
@@ -36,13 +34,13 @@ export function StatusBar({ active }: { active: boolean }) {
     };
   }, [active]);
 
-  // Etiķetes pēc robežām
   useEffect(() => {
+    // ES2019-compatible: reverse+find (nevis findLast)
     const steps = DEFAULT_STEPS;
-    const current = steps
+    const current: Step | undefined = steps
       .slice()
       .reverse()
-      .find((s) => pct >= s.at);
+      .find((s: Step) => pct >= s.at);
     if (current) setLabel(current.label);
   }, [pct]);
 
