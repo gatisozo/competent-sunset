@@ -9,7 +9,7 @@ import { runAnalyze } from "./lib/analyzeClient";
 type LandingProps = {
   freeReport?: any;
   onRunTest?: (url: string) => Promise<void> | void;
-  onOrderFull?: () => void;
+  onOrderFull?: (url?: string) => void; // ⬅︎ pieņem URL no Landing
   onSeeSample?: () => void;
 };
 
@@ -44,7 +44,7 @@ type AnalyzeData = {
     sitemapUrlGuess?: string;
     sitemapOk?: boolean | null;
   };
-  // headingsOutline?: Array<{ tag: string; text: string }>;
+  headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
 function safePct(n?: number) {
@@ -71,8 +71,7 @@ function hostFromUrl(u?: string) {
 }
 function firstHeadingText(data?: AnalyzeData | null): string | undefined {
   if (!data) return undefined;
-  const ho: Array<{ tag: string; text: string }> =
-    (data as any)?.headingsOutline ?? [];
+  const ho: Array<{ tag: string; text: string }> = data.headingsOutline ?? [];
   const h1 = ho.find((h) => h.tag?.toLowerCase() === "h1")?.text;
   return h1 || ho[0]?.text || undefined;
 }
@@ -95,6 +94,52 @@ function canonicalSuggestion(data?: AnalyzeData | null): string {
     return "https://example.com/";
   }
 }
+function normalizeUrl(u: string) {
+  return u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
+}
+
+// ── Lift (≈ % leads) heuristikas ──────────────────────────────────────────────
+function liftHero(d?: AnalyzeData | null) {
+  const h1c = d?.seo?.h1Count ?? 0;
+  return h1c !== 1 ? 12 : 8; // ja nav skaidrs H1 – lielāks lifts
+}
+function liftMetaDesc(d?: AnalyzeData | null) {
+  if (!d?.seo?.metaDescriptionPresent) return 4;
+  const len = d?.meta?.description?.length ?? 0;
+  if (len < 140 || len > 160) return 2;
+  return 1;
+}
+function liftAlt(d?: AnalyzeData | null) {
+  const total = d?.images?.total ?? 0;
+  const miss = d?.images?.missingAlt ?? 0;
+  if (total <= 0) return 0;
+  const ratio = miss / total; // 0..1
+  return Math.round(Math.min(3, 3 * ratio)); // līdz 3%
+}
+function liftH1(d?: AnalyzeData | null) {
+  const h1c = d?.seo?.h1Count ?? 0;
+  return h1c !== 1 ? 6 : 0;
+}
+function liftCanonical(d?: AnalyzeData | null) {
+  return d?.seo?.canonicalPresent ? 0 : 1;
+}
+function liftRobots(d?: AnalyzeData | null) {
+  return d?.robots?.robotsTxtOk ? 0 : 1;
+}
+function liftSitemap(d?: AnalyzeData | null) {
+  return d?.robots?.sitemapOk ? 0 : 1;
+}
+function liftSocial(d?: AnalyzeData | null) {
+  const og = Object.values(d?.social?.og ?? {}).filter(Boolean).length;
+  const tw = Object.values(d?.social?.twitter ?? {}).filter(Boolean).length;
+  if (og + tw === 0) return 2;
+  if (og + tw < 3) return 1;
+  return 0;
+}
+function liftInternal(d?: AnalyzeData | null) {
+  const internal = d?.links?.internal ?? 0;
+  return internal < 5 ? 3 : 1;
+}
 
 export default function Landing({
   freeReport: _freeReport,
@@ -106,7 +151,7 @@ export default function Landing({
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showResults, setShowResults] = useState(false);
-  // “Overall” tabs ir izņemts — sākam ar “Sections Present”
+  // “Overall” tabs izņemts — sākam ar “Sections Present”
   const [activeTab, setActiveTab] = useState<string>("Sections Present");
   const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
@@ -166,8 +211,7 @@ export default function Landing({
     const d = data;
     if (!d) return [] as { title: string; ok: boolean; why?: string }[];
 
-    const ho: Array<{ tag: string; text: string }> =
-      (d as any).headingsOutline ?? [];
+    const ho: Array<{ tag: string; text: string }> = d.headingsOutline ?? [];
     const headingsText = ho.map((h) => h.text?.toLowerCase() || "").join(" | ");
     const hHas = (kw: string | RegExp) =>
       typeof kw === "string"
@@ -250,20 +294,44 @@ export default function Landing({
     return sections;
   }, [data]);
 
-  // ── Quick Wins (Esošais vs Ieteicamais) — null-safe ────────────────────────
+  // ── Quick Wins (Esošais vs Ieteicamais + ≈ lift) — null-safe ───────────────
   const quickWinsRows = useMemo(() => {
     if (!data)
-      return [] as { field: string; current: string; suggested: string }[];
+      return [] as {
+        field: string;
+        current: string;
+        suggested: string;
+        lift: number;
+      }[];
     const d = data;
-    const rows: { field: string; current: string; suggested: string }[] = [];
+    const rows: {
+      field: string;
+      current: string;
+      suggested: string;
+      lift: number;
+    }[] = [];
+
+    // Hero text (ja pieejams) + ieteikums
+    const heroCurrent = firstHeadingText(d) || d.meta?.title || "";
+    const heroSuggested = heroCurrent
+      ? clamp(`${heroCurrent} — Clear value. Start in minutes.`, 90)
+      : "Add a clear value headline (what, for whom, primary benefit).";
+    rows.push({
+      field: "Hero text",
+      current: heroCurrent || "Nav atrasts",
+      suggested: heroSuggested,
+      lift: liftHero(d),
+    });
 
     // Meta description
     const desc = d.meta?.description;
+    const mdLift = liftMetaDesc(d);
     if (!desc) {
       rows.push({
         field: "Meta description",
         current: "Nav atrasts",
         suggested: suggestMeta(d),
+        lift: mdLift,
       });
     } else {
       let note = "";
@@ -273,10 +341,12 @@ export default function Landing({
         field: "Meta description",
         current: clamp(desc, 200) + note,
         suggested: suggestMeta(d),
+        lift: mdLift,
       });
     }
 
     // ALT teksti
+    const altLift = liftAlt(d);
     const imgs = d.images?.total ?? 0;
     const miss = d.images?.missingAlt ?? 0;
     if (imgs > 0) {
@@ -289,15 +359,16 @@ export default function Landing({
             : "OK — ALT pārsvarā ir",
         suggested:
           'Pievienot īsus, aprakstošus ALT (piem., “Produkts – galvenā īpašība”). Dekoratīviem attēliem alt="".',
+        lift: altLift,
       });
     }
 
     // H1
-    const h1c = d.seo?.h1Count ?? 0;
     rows.push({
       field: "H1 virsraksti",
-      current: `${h1c} uz lapu`,
+      current: `${d.seo?.h1Count ?? 0} uz lapu`,
       suggested: "Nodrošināt tieši 1 H1 ar galveno nolūku/atslēgvārdu.",
+      lift: liftH1(d),
     });
 
     // Canonical
@@ -308,15 +379,17 @@ export default function Landing({
       suggested: hasCanonical
         ? "Pārbaudīt vai norāda uz kanonisko bez parametriem"
         : `Pievienot <link rel="canonical" href="${canonicalSuggestion(d)}">`,
+      lift: liftCanonical(d),
     });
 
-    // Robots/Sitemap
+    // Robots / Sitemap
     rows.push({
       field: "robots.txt",
       current: d.robots?.robotsTxtOk ? "OK" : "Nav/nesasniedzams",
       suggested: d.robots?.robotsTxtOk
         ? "Pievienot arī sitemap norādi robots.txt failā"
         : "Publicēt /robots.txt ar piemērotiem noteikumiem",
+      lift: liftRobots(d),
     });
     rows.push({
       field: "sitemap.xml",
@@ -324,6 +397,7 @@ export default function Landing({
       suggested: d.robots?.sitemapOk
         ? "Sekot, lai sitemap atjaunojas automātiski"
         : "Publicēt /sitemap.xml un norādīt to robots.txt",
+      lift: liftSitemap(d),
     });
 
     // Social tags
@@ -339,6 +413,7 @@ export default function Landing({
           : "Trūkst",
       suggested:
         "Pievienot og:title, og:description, og:image, og:url, twitter:card u.c. kopīgošanas bagātinājumiem.",
+      lift: liftSocial(d),
     });
 
     // Internal links
@@ -349,12 +424,13 @@ export default function Landing({
       current: `Kopā ${total} · Iekšējās ${internal}`,
       suggested:
         "Vismaz 5+ iekšējās saites uz galvenajām lapām (produkts, cenas, kontakti, FAQ).",
+      lift: liftInternal(d),
     });
 
     return rows;
   }, [data]);
 
-  // ── Backlog (Esošais vs Ieteicamais + priority/effort) — null-safe ─────────
+  // ── Backlog (Esošais vs Ieteicamais + priority/effort + ≈ lift) — null-safe ─
   const backlogRows = useMemo(() => {
     if (!data)
       return [] as {
@@ -363,6 +439,7 @@ export default function Landing({
         suggested: string;
         priority: "low" | "med" | "high";
         effort: string;
+        lift: number;
       }[];
     const d = data;
     const rows: {
@@ -371,6 +448,7 @@ export default function Landing({
       suggested: string;
       priority: "low" | "med" | "high";
       effort: string;
+      lift: number;
     }[] = [];
 
     const h1c = d.seo?.h1Count ?? 0;
@@ -381,6 +459,7 @@ export default function Landing({
         suggested: "Iestatīt tieši 1 H1 ar skaidru vērtības piedāvājumu.",
         priority: "high",
         effort: "1–2h",
+        lift: liftH1(d),
       });
     }
 
@@ -395,6 +474,7 @@ export default function Landing({
         suggested: suggestMeta(d),
         priority: "med",
         effort: "1–2h",
+        lift: liftMetaDesc(d),
       });
     }
 
@@ -405,6 +485,7 @@ export default function Landing({
         suggested: canonicalSuggestion(d),
         priority: "med",
         effort: "1h",
+        lift: liftCanonical(d),
       });
     }
 
@@ -418,6 +499,7 @@ export default function Landing({
           "Pievienot ALT visiem nedekoratīviem attēliem; īss, aprakstošs teksts.",
         priority: "med",
         effort: "2–4h",
+        lift: liftAlt(d),
       });
     }
 
@@ -428,6 +510,7 @@ export default function Landing({
         suggested: "Publicēt /robots.txt un iekļaut sitemap norādi.",
         priority: "med",
         effort: "1h",
+        lift: liftRobots(d),
       });
     }
     if (!d.robots?.sitemapOk) {
@@ -438,6 +521,7 @@ export default function Landing({
           "Publicēt /sitemap.xml (dinamiski ģenerētu) un norādīt robots.txt.",
         priority: "med",
         effort: "1–2h",
+        lift: liftSitemap(d),
       });
     }
 
@@ -453,6 +537,7 @@ export default function Landing({
         suggested: "og:title, og:description, og:image, og:url, twitter:card",
         priority: "low",
         effort: "1–2h",
+        lift: liftSocial(d),
       });
     }
 
@@ -465,12 +550,13 @@ export default function Landing({
         suggested: "Pievienot 5–10 iekšējās saites uz galvenajām ceļa lapām.",
         priority: "med",
         effort: "2–4h",
+        lift: liftInternal(d),
       });
     }
 
-    // papildus: ja trūkst noteiktas sadaļas
+    // papildus: ja trūkst noteiktas sadaļas (no “Sections Present”)
     const secMap = Object.fromEntries(
-      derivedSections.map((s) => [s.title, s.ok])
+      (derivedSections || []).map((s) => [s.title, s.ok])
     );
     if (secMap["pricing"] === false) {
       rows.push({
@@ -479,6 +565,7 @@ export default function Landing({
         suggested: "Pievienot skaidru cenu plānu salīdzinājumu ar CTA.",
         priority: "med",
         effort: "1–2d",
+        lift: 4,
       });
     }
     if (secMap["faq"] === false) {
@@ -488,6 +575,7 @@ export default function Landing({
         suggested: "Pievienot 6–10 biežākos jautājumus ar īsām atbildēm.",
         priority: "med",
         effort: "0.5–1d",
+        lift: 3,
       });
     }
     if (secMap["social proof"] === false) {
@@ -497,6 +585,19 @@ export default function Landing({
         suggested: "Pievienot klientu atsauksmes vai logo rindu (min. 6).",
         priority: "high",
         effort: "1–2d",
+        lift: 6,
+      });
+    }
+
+    // Hero teksta uzlabojums kā backlog (ja vajag)
+    if (!firstHeadingText(d)) {
+      rows.push({
+        task: "Hero text",
+        current: "Nav skaidra hero virsraksta",
+        suggested: "Pievienot skaidru vērtības virsrakstu virs pirmā ekrāna.",
+        priority: "high",
+        effort: "1–2h",
+        lift: liftHero(d),
       });
     }
 
@@ -523,8 +624,6 @@ export default function Landing({
   }
 
   // ── Reālā analīze ───────────────────────────────────────────────────────────
-  const normalizeUrl = (u: string) =>
-    u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
   const runTestReal = async () => {
     if (!url.trim()) return;
     const normalized = normalizeUrl(url);
@@ -572,9 +671,13 @@ export default function Landing({
     runTestReal();
   };
 
-  // ── Full report pārejas (nemainītas) ────────────────────────────────────────
-  const resolvedAuditUrl =
-    lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
+  // ── Full report pārejas (pasniedzam pēdējo URL) ────────────────────────────
+  const resolvedAuditUrl = (
+    data?.finalUrl ||
+    data?.url ||
+    lastTestedUrl ||
+    (url.trim() ? normalizeUrl(url) : "")
+  ).trim();
   const orderFullInternal = () => {
     const href = `/full?autostart=1${
       resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
@@ -613,7 +716,9 @@ export default function Landing({
             Detailed view available in the Full Audit.
           </div>
           <button
-            onClick={onOrderFull ?? orderFullInternal}
+            onClick={() =>
+              onOrderFull ? onOrderFull(resolvedAuditUrl) : orderFullInternal()
+            }
             className="mt-3 rounded-lg px-4 py-2 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
           >
             Order Full Audit
@@ -883,7 +988,6 @@ export default function Landing({
             <div className="mt-6">
               <div className="flex gap-2 pl-2">
                 {[
-                  // "Overall", // ← izņemts
                   "Sections Present",
                   "Quick Wins",
                   "Prioritized Backlog",
@@ -932,7 +1036,7 @@ export default function Landing({
                   </div>
                 )}
 
-                {/* Quick Wins → Esošais vs Ieteicamais */}
+                {/* Quick Wins → Esošais vs Ieteicamais + Lift */}
                 {activeTab === "Quick Wins" && (
                   <div className="overflow-x-auto">
                     <table className="w-full border text-sm">
@@ -941,6 +1045,9 @@ export default function Landing({
                           <th className="p-2 border text-left">Lauks</th>
                           <th className="p-2 border text-left">Esošais</th>
                           <th className="p-2 border text-left">Ieteicamais</th>
+                          <th className="p-2 border text-left">
+                            Potenciālais ieguvums
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -948,22 +1055,24 @@ export default function Landing({
                           ? quickWinsRows
                           : [
                               {
+                                field: "Hero text",
+                                current: "—",
+                                suggested: "Add a clear value headline.",
+                                lift: 8,
+                              },
+                              {
                                 field: "Meta description",
                                 current: "Nav atrasts",
                                 suggested:
                                   "Pievienot ~150 rakstzīmju aprakstu ar vērtības solījumu.",
+                                lift: 4,
                               },
                               {
                                 field: "Image ALT texts",
                                 current: "Trūkst ALT vairākos attēlos",
                                 suggested:
                                   "Pievienot ALT tekstus visiem nedekoratīviem attēliem.",
-                              },
-                              {
-                                field: "Canonical",
-                                current: "Nav",
-                                suggested:
-                                  'Pievienot <link rel="canonical"> uz kanonisko URL.',
+                                lift: 3,
                               },
                             ]
                         ).map((r, i) => (
@@ -975,6 +1084,9 @@ export default function Landing({
                             <td className="p-2 border align-top">
                               {r.suggested}
                             </td>
+                            <td className="p-2 border align-top">
+                              ≈ +{Math.max(0, r.lift)}% leads
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -982,7 +1094,7 @@ export default function Landing({
                   </div>
                 )}
 
-                {/* Prioritized Backlog → Esošais vs Ieteicamais + Priority/Effort */}
+                {/* Prioritized Backlog → Esošais vs Ieteicamais + Priority/Effort + Lift */}
                 {activeTab === "Prioritized Backlog" && (
                   <div className="overflow-x-auto">
                     <table className="w-full border text-sm">
@@ -993,6 +1105,9 @@ export default function Landing({
                           <th className="p-2 border text-left">Ieteicamais</th>
                           <th className="p-2 border text-left">Prioritāte</th>
                           <th className="p-2 border text-left">Effort</th>
+                          <th className="p-2 border text-left">
+                            Potenciālais ieguvums
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1005,6 +1120,7 @@ export default function Landing({
                                 suggested: "Pievienot kanonisko URL",
                                 priority: "med",
                                 effort: "1h",
+                                lift: 1,
                               },
                               {
                                 task: "Sitemap",
@@ -1013,6 +1129,7 @@ export default function Landing({
                                   "Publicēt /sitemap.xml un norādīt robots.txt",
                                 priority: "med",
                                 effort: "1–2h",
+                                lift: 1,
                               },
                               {
                                 task: "ALT teksti",
@@ -1020,6 +1137,7 @@ export default function Landing({
                                 suggested: "Pievienot ALT visiem attēliem",
                                 priority: "med",
                                 effort: "2–4h",
+                                lift: 3,
                               },
                             ] as any)
                         ).map((r: any, i: number) => (
@@ -1045,6 +1163,9 @@ export default function Landing({
                               </span>
                             </td>
                             <td className="p-2 border align-top">{r.effort}</td>
+                            <td className="p-2 border align-top">
+                              ≈ +{Math.max(0, r.lift)}% leads
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1122,13 +1243,17 @@ export default function Landing({
             </ul>
             <div className="mt-6 flex gap-3">
               <button
-                onClick={onOrderFull ?? orderFullInternal}
+                onClick={() =>
+                  onOrderFull
+                    ? onOrderFull(resolvedAuditUrl)
+                    : orderFullInternal()
+                }
                 className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
               >
                 Order Full Audit
               </button>
               <button
-                onClick={onSeeSample ?? seeSampleInternal}
+                onClick={seeSampleInternal}
                 className="rounded-xl px-5 py-3 border font-medium hover:bg-slate-50"
               >
                 See Sample Report

@@ -1,14 +1,18 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import Landing from "./Landing";
 import FullReportView from "./components/FullReportView";
-import { analyzeUrl } from "./lib/analyze"; // jau esošā funkcija (free/full)
+import { analyzeUrl } from "./lib/analyze";
+
+function normalizeUrl(input?: string) {
+  const s = (input || "").trim();
+  if (!s) return "";
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
+}
 
 export default function App() {
-  // --- vienkārša SPA routēšana pēc path ---
   const pathname =
     typeof window !== "undefined" ? window.location.pathname : "/";
 
-  // --- state priekš Free testa (kā Tev bija) ---
   const [freeReport, setFreeReport] = useState<any | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -16,7 +20,6 @@ export default function App() {
     try {
       setRunning(true);
       setFreeReport(null);
-      // FREE režīms -> parādām Free Report uz galvenās lapas
       const data = await analyzeUrl(url, "free");
       setFreeReport(data);
     } catch (e) {
@@ -27,13 +30,13 @@ export default function App() {
     }
   }
 
-  function handleOrderFull() {
-    // Ja ir pēdējais notestētais URL, atveram /full ar autostartu
-    const url = freeReport?.url ? freeReport.url : "";
+  // ⬇︎ pieņem izvēles URL no Landing (ja nav – izmanto pēdējo freeReport.url)
+  function handleOrderFull(u?: string) {
+    const chosen = normalizeUrl(u) || normalizeUrl(freeReport?.url);
     const base = typeof window !== "undefined" ? window.location.origin : "";
-    if (url) {
+    if (chosen) {
       window.location.href = `${base}/full?autostart=1&url=${encodeURIComponent(
-        url
+        chosen
       )}`;
     } else {
       window.location.href = `${base}/full`;
@@ -45,17 +48,15 @@ export default function App() {
     window.location.href = `${base}/full?sample=1`;
   }
 
-  // --- /full maršruts -> renderējam FullReportView (tur jau ir autostarts no query) ---
   if (pathname === "/full") {
     return <FullReportView />;
   }
 
-  // --- Citādi -> Landing (kā līdz šim) ---
   return (
     <Landing
       freeReport={freeReport}
       onRunTest={handleRunTest}
-      onOrderFull={handleOrderFull}
+      onOrderFull={handleOrderFull} // ⬅︎ Landing tagad nodod pēdējo URL
       onSeeSample={handleSeeSample}
     />
   );
