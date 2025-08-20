@@ -4,8 +4,6 @@ import GradeBadge from "./components/GradeBadge";
 import Features from "./components/Features";
 import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
-
-// reālās analīzes klients
 import { runAnalyze } from "./lib/analyzeClient";
 
 type LandingProps = {
@@ -46,7 +44,7 @@ type AnalyzeData = {
     sitemapUrlGuess?: string;
     sitemapOk?: boolean | null;
   };
-  // optionally: headingsOutline?: Array<{ tag: string; text: string }>;
+  // headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
 function safePct(n?: number) {
@@ -61,7 +59,7 @@ const DEV_MODE =
   (typeof import.meta !== "undefined" &&
     (import.meta as any).env?.VITE_DEV_MODE === "1");
 
-// --- helperi ieteicamo tekstu veidošanai ---
+// ── Helpers (null-safe) ────────────────────────────────────────────────────────
 const clamp = (s: string, max: number) =>
   s.length > max ? s.slice(0, max - 1) + "…" : s;
 function hostFromUrl(u?: string) {
@@ -71,24 +69,25 @@ function hostFromUrl(u?: string) {
     return "";
   }
 }
-function firstHeadingText(data: any): string | undefined {
+function firstHeadingText(data?: AnalyzeData | null): string | undefined {
+  if (!data) return undefined;
   const ho: Array<{ tag: string; text: string }> =
     (data as any)?.headingsOutline ?? [];
   const h1 = ho.find((h) => h.tag?.toLowerCase() === "h1")?.text;
-  return h1 || ho[0]?.text;
+  return h1 || ho[0]?.text || undefined;
 }
-function suggestMeta(data: AnalyzeData): string {
+function suggestMeta(data?: AnalyzeData | null): string {
   const base =
-    firstHeadingText(data) || data.meta?.title || "Discover our product";
-  const site = hostFromUrl(data.finalUrl || data.url);
-  // vienkāršs, drošs ieteikums 140–160 rakstzīmēs
+    firstHeadingText(data) || data?.meta?.title || "Discover our product";
+  const site = hostFromUrl(data?.finalUrl || data?.url);
   let s = `${base} — ${site}. Explore features, pricing and FAQs. Get started in minutes.`;
   if (s.length < 140) s += " Fast, secure and user-friendly.";
   return clamp(s, 160);
 }
-function canonicalSuggestion(data: AnalyzeData): string {
+function canonicalSuggestion(data?: AnalyzeData | null): string {
   try {
-    const u = new URL(data.finalUrl || data.url || "");
+    const raw = data?.finalUrl || data?.url || "";
+    const u = new URL(raw);
     u.hash = "";
     u.search = "";
     return u.toString();
@@ -107,23 +106,20 @@ export default function Landing({
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showResults, setShowResults] = useState(false);
-
-  // ⬇️ “Overall” tabu NOŅEMAM → sākam ar “Sections Present”
+  // “Overall” tabs ir izņemts — sākam ar “Sections Present”
   const [activeTab, setActiveTab] = useState<string>("Sections Present");
-
   const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
 
-  // reālie dati + skori (Grade panelim paliek)
   const [data, setData] = useState<AnalyzeData | null>(null);
-  const [overallScore, setOverallScore] = useState<number>(73); // default vizuālam
+  const [overallScore, setOverallScore] = useState<number>(73);
   const [structurePct, setStructurePct] = useState<number>(76);
   const [contentPct, setContentPct] = useState<number>(70);
 
   const previewRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // score no reālajiem datiem (kā iepriekš)
+  // ── Score no reālajiem datiem ───────────────────────────────────────────────
   const computeScores = (d: AnalyzeData | null) => {
     if (!d) return { overall: 0, structure: 0, content: 0 };
     let score = 50;
@@ -165,10 +161,11 @@ export default function Landing({
     return { overall: score, structure, content };
   };
 
-  // Heuristikas “Sections Present” (paliek kā bija)
+  // ── Sections Present (null-safe) ────────────────────────────────────────────
   const derivedSections = useMemo(() => {
     const d = data;
     if (!d) return [] as { title: string; ok: boolean; why?: string }[];
+
     const ho: Array<{ tag: string; text: string }> =
       (d as any).headingsOutline ?? [];
     const headingsText = ho.map((h) => h.text?.toLowerCase() || "").join(" | ");
@@ -253,35 +250,35 @@ export default function Landing({
     return sections;
   }, [data]);
 
-  // Quick Wins: “Esošais vs Ieteicamais”
+  // ── Quick Wins (Esošais vs Ieteicamais) — null-safe ────────────────────────
   const quickWinsRows = useMemo(() => {
-    const rows: { field: string; current: string; suggested: string }[] = [];
+    if (!data)
+      return [] as { field: string; current: string; suggested: string }[];
     const d = data;
+    const rows: { field: string; current: string; suggested: string }[] = [];
 
     // Meta description
-    if (d) {
-      const desc = d.meta?.description;
-      if (!desc) {
-        rows.push({
-          field: "Meta description",
-          current: "Nav atrasts",
-          suggested: suggestMeta(d),
-        });
-      } else {
-        let note = "";
-        if (desc.length < 140) note = " (par īsu — ieteicams ~150 rakstzīmes)";
-        if (desc.length > 160) note = " (par garu — ≤160 rakstzīmes)";
-        rows.push({
-          field: "Meta description",
-          current: clamp(desc, 200) + note,
-          suggested: suggestMeta(d),
-        });
-      }
+    const desc = d.meta?.description;
+    if (!desc) {
+      rows.push({
+        field: "Meta description",
+        current: "Nav atrasts",
+        suggested: suggestMeta(d),
+      });
+    } else {
+      let note = "";
+      if (desc.length < 140) note = " (par īsu — ieteicams ~150 rakstzīmes)";
+      if (desc.length > 160) note = " (par garu — ≤160 rakstzīmes)";
+      rows.push({
+        field: "Meta description",
+        current: clamp(desc, 200) + note,
+        suggested: suggestMeta(d),
+      });
     }
 
     // ALT teksti
-    const imgs = d?.images?.total ?? 0;
-    const miss = d?.images?.missingAlt ?? 0;
+    const imgs = d.images?.total ?? 0;
+    const miss = d.images?.missingAlt ?? 0;
     if (imgs > 0) {
       const ratio = Math.round((miss / Math.max(1, imgs)) * 100);
       rows.push({
@@ -296,7 +293,7 @@ export default function Landing({
     }
 
     // H1
-    const h1c = d?.seo?.h1Count ?? 0;
+    const h1c = d.seo?.h1Count ?? 0;
     rows.push({
       field: "H1 virsraksti",
       current: `${h1c} uz lapu`,
@@ -304,34 +301,34 @@ export default function Landing({
     });
 
     // Canonical
-    const hasCanonical = !!d?.seo?.canonicalPresent || !!d?.meta?.canonical;
+    const hasCanonical = !!d.seo?.canonicalPresent || !!d.meta?.canonical;
     rows.push({
       field: "Canonical",
-      current: hasCanonical ? d!.meta!.canonical || "Ir" : "Nav",
+      current: hasCanonical ? d.meta?.canonical || "Ir" : "Nav",
       suggested: hasCanonical
         ? "Pārbaudīt vai norāda uz kanonisko bez parametriem"
-        : `Pievienot <link rel="canonical" href="${canonicalSuggestion(d!)}">`,
+        : `Pievienot <link rel="canonical" href="${canonicalSuggestion(d)}">`,
     });
 
     // Robots/Sitemap
     rows.push({
       field: "robots.txt",
-      current: d?.robots?.robotsTxtOk ? "OK" : "Nav/nesasniedzams",
-      suggested: d?.robots?.robotsTxtOk
+      current: d.robots?.robotsTxtOk ? "OK" : "Nav/nesasniedzams",
+      suggested: d.robots?.robotsTxtOk
         ? "Pievienot arī sitemap norādi robots.txt failā"
         : "Publicēt /robots.txt ar piemērotiem noteikumiem",
     });
     rows.push({
       field: "sitemap.xml",
-      current: d?.robots?.sitemapOk ? "OK" : "Nav/nesasniedzams",
-      suggested: d?.robots?.sitemapOk
+      current: d.robots?.sitemapOk ? "OK" : "Nav/nesasniedzams",
+      suggested: d.robots?.sitemapOk
         ? "Sekot, lai sitemap atjaunojas automātiski"
         : "Publicēt /sitemap.xml un norādīt to robots.txt",
     });
 
     // Social tags
-    const ogCount = Object.values(d?.social?.og ?? {}).filter(Boolean).length;
-    const twCount = Object.values(d?.social?.twitter ?? {}).filter(
+    const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
+    const twCount = Object.values(d.social?.twitter ?? {}).filter(
       Boolean
     ).length;
     rows.push({
@@ -345,8 +342,8 @@ export default function Landing({
     });
 
     // Internal links
-    const total = d?.links?.total ?? 0;
-    const internal = d?.links?.internal ?? 0;
+    const total = d.links?.total ?? 0;
+    const internal = d.links?.internal ?? 0;
     rows.push({
       field: "Iekšējās saites",
       current: `Kopā ${total} · Iekšējās ${internal}`,
@@ -357,8 +354,17 @@ export default function Landing({
     return rows;
   }, [data]);
 
-  // Backlog: “Esošais vs Ieteicamais” + prioritāte/effort
+  // ── Backlog (Esošais vs Ieteicamais + priority/effort) — null-safe ─────────
   const backlogRows = useMemo(() => {
+    if (!data)
+      return [] as {
+        task: string;
+        current: string;
+        suggested: string;
+        priority: "low" | "med" | "high";
+        effort: string;
+      }[];
+    const d = data;
     const rows: {
       task: string;
       current: string;
@@ -366,10 +372,8 @@ export default function Landing({
       priority: "low" | "med" | "high";
       effort: string;
     }[] = [];
-    const d = data;
 
-    // Secinājumi balstīti uz tiem pašiem Quick Wins + papildinājumi
-    const h1c = d?.seo?.h1Count ?? 0;
+    const h1c = d.seo?.h1Count ?? 0;
     if (h1c !== 1) {
       rows.push({
         task: "H1 struktūra",
@@ -381,31 +385,31 @@ export default function Landing({
     }
 
     if (
-      !d?.seo?.metaDescriptionPresent ||
+      !d.seo?.metaDescriptionPresent ||
       (d.meta?.description &&
         (d.meta.description.length < 140 || d.meta.description.length > 160))
     ) {
       rows.push({
         task: "Meta description",
-        current: d?.meta?.description ? clamp(d.meta.description, 200) : "Nav",
-        suggested: suggestMeta(d!),
+        current: d.meta?.description ? clamp(d.meta.description, 200) : "Nav",
+        suggested: suggestMeta(d),
         priority: "med",
         effort: "1–2h",
       });
     }
 
-    if (!d?.seo?.canonicalPresent) {
+    if (!d.seo?.canonicalPresent) {
       rows.push({
         task: "Canonical",
         current: "Nav",
-        suggested: canonicalSuggestion(d!),
+        suggested: canonicalSuggestion(d),
         priority: "med",
         effort: "1h",
       });
     }
 
-    const imgs = d?.images?.total ?? 0;
-    const miss = d?.images?.missingAlt ?? 0;
+    const imgs = d.images?.total ?? 0;
+    const miss = d.images?.missingAlt ?? 0;
     if (imgs > 0 && miss > 0) {
       rows.push({
         task: "ALT teksti",
@@ -417,7 +421,7 @@ export default function Landing({
       });
     }
 
-    if (!d?.robots?.robotsTxtOk) {
+    if (!d.robots?.robotsTxtOk) {
       rows.push({
         task: "robots.txt",
         current: "Nav/nesasniedzams",
@@ -426,7 +430,7 @@ export default function Landing({
         effort: "1h",
       });
     }
-    if (!d?.robots?.sitemapOk) {
+    if (!d.robots?.sitemapOk) {
       rows.push({
         task: "sitemap.xml",
         current: "Nav/nesasniedzams",
@@ -437,8 +441,8 @@ export default function Landing({
       });
     }
 
-    const ogCount = Object.values(d?.social?.og ?? {}).filter(Boolean).length;
-    const twCount = Object.values(d?.social?.twitter ?? {}).filter(
+    const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
+    const twCount = Object.values(d.social?.twitter ?? {}).filter(
       Boolean
     ).length;
     if (ogCount + twCount < 3) {
@@ -452,8 +456,8 @@ export default function Landing({
       });
     }
 
-    const total = d?.links?.total ?? 0;
-    const internal = d?.links?.internal ?? 0;
+    const total = d.links?.total ?? 0;
+    const internal = d.links?.internal ?? 0;
     if (internal < 5) {
       rows.push({
         task: "Iekšējās saites",
@@ -464,7 +468,7 @@ export default function Landing({
       });
     }
 
-    // papildus: ja nav Pricing/FAQ/Social proof sekcijas (no “Sections Present”)
+    // papildus: ja trūkst noteiktas sadaļas
     const secMap = Object.fromEntries(
       derivedSections.map((s) => [s.title, s.ok])
     );
@@ -499,7 +503,7 @@ export default function Landing({
     return rows;
   }, [data, derivedSections]);
 
-  // progress animācija
+  // ── Progress animācija ──────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -518,7 +522,7 @@ export default function Landing({
     rafRef.current = requestAnimationFrame(tick);
   }
 
-  // reāls tests
+  // ── Reālā analīze ───────────────────────────────────────────────────────────
   const normalizeUrl = (u: string) =>
     u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
   const runTestReal = async () => {
@@ -526,8 +530,7 @@ export default function Landing({
     const normalized = normalizeUrl(url);
     setLastTestedUrl(normalized);
 
-    // reset
-    setActiveTab("Sections Present"); // ⬅️ vairs ne “Overall”
+    setActiveTab("Sections Present");
     setShowResults(false);
     setLoading(true);
     setErr(null);
@@ -543,14 +546,13 @@ export default function Landing({
     const res = await runAnalyze(normalized);
     setLoading(false);
 
-    if (res.ok) {
-      const d = res.data as AnalyzeData;
+    if ((res as any).ok) {
+      const d = (res as any).data as AnalyzeData;
       setData(d);
       const sc = computeScores(d);
       setOverallScore(sc.overall);
       setStructurePct(sc.structure);
       setContentPct(sc.content);
-
       setProgress(100);
       setShowResults(true);
       setTimeout(() => {
@@ -560,7 +562,7 @@ export default function Landing({
         });
       }, 120);
     } else {
-      setErr(res.error || "Analyze failed");
+      setErr((res as any).error || "Analyze failed");
       setProgress(0);
       setShowResults(false);
     }
@@ -570,7 +572,7 @@ export default function Landing({
     runTestReal();
   };
 
-  // DEV → Full report links
+  // ── Full report pārejas (nemainītas) ────────────────────────────────────────
   const resolvedAuditUrl =
     lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
   const orderFullInternal = () => {
@@ -586,7 +588,7 @@ export default function Landing({
     window.location.href = href;
   };
 
-  // UI helpers
+  // ── UI helpers ─────────────────────────────────────────────────────────────
   const TabButton = ({ name }: { name: string }) => (
     <button
       type="button"
@@ -782,7 +784,6 @@ export default function Landing({
                   <span className="ml-3 text-slate-500">Grade (auto)</span>
                 </div>
 
-                {/* īss kopsavilkums */}
                 {data && (
                   <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm text-slate-700">
                     <div className="rounded-xl border p-3">
@@ -878,11 +879,11 @@ export default function Landing({
               </div>
             </div>
 
-            {/* ======= TABS ======= */}
+            {/* ───── TABS ───── */}
             <div className="mt-6">
               <div className="flex gap-2 pl-2">
                 {[
-                  // "Overall", // ⬅️ NOŅEMTS
+                  // "Overall", // ← izņemts
                   "Sections Present",
                   "Quick Wins",
                   "Prioritized Backlog",
@@ -895,7 +896,7 @@ export default function Landing({
               </div>
 
               <div className="border border-t-0 rounded-b-xl bg-white p-4">
-                {/* Sections Present (kā bija) */}
+                {/* Sections Present */}
                 {activeTab === "Sections Present" && (
                   <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
                     {(derivedSections.length
@@ -981,7 +982,7 @@ export default function Landing({
                   </div>
                 )}
 
-                {/* Prioritized Backlog → Esošais vs Ieteicamais + Prioritāte/Effort */}
+                {/* Prioritized Backlog → Esošais vs Ieteicamais + Priority/Effort */}
                 {activeTab === "Prioritized Backlog" && (
                   <div className="overflow-x-auto">
                     <table className="w-full border text-sm">
@@ -1051,7 +1052,7 @@ export default function Landing({
                   </div>
                 )}
 
-                {/* Pārējie tab paliek blur (netiek mainīti) */}
+                {/* Pārējie tab paliek blur */}
                 {BLUR_TABS.has(activeTab) && (
                   <BlurPanel>
                     <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
@@ -1062,7 +1063,7 @@ export default function Landing({
               </div>
             </div>
 
-            {/* Scorecard CTA */}
+            {/* CTA */}
             <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
               <div>
                 <h3 className="text-xl md:text-2xl font-semibold">
