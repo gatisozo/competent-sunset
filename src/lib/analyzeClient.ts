@@ -1,35 +1,46 @@
 // src/lib/analyzeClient.ts
-export type AnalyzeResponse =
-  | { ok: true; data: any }
-  | { ok: false; error: string; code?: string };
+// Klienta helpers Free reportam (Landing/FreeReport).
+// Saglabā veco API formu: runAnalyze(url, signal?) -> { ok, data? , error? }
 
 function normalizeUrl(input: string): string {
-  let s = (input ?? "").trim();
-  if (!s) return s;
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
-  try {
-    const u = new URL(s);
-    if (!["http:", "https:"].includes(u.protocol)) throw new Error();
-    u.hash = "";
-    return u.toString();
-  } catch {
-    return s;
-  }
+  const s = (input || "").trim();
+  if (!s) return "";
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
 }
 
 export async function runAnalyze(
-  input: string,
+  url: string,
   signal?: AbortSignal
-): Promise<AnalyzeResponse> {
-  const url = normalizeUrl(input);
+): Promise<{ ok: boolean; data?: any; error?: string }> {
   try {
-    const r = await fetch(`/api/analyze?url=${encodeURIComponent(url)}`, {
+    const u = normalizeUrl(url);
+    if (!u) throw new Error("Missing URL");
+
+    const r = await fetch(`/api/analyze?url=${encodeURIComponent(u)}`, {
       method: "GET",
       signal,
+      headers: { "cache-control": "no-store" },
     });
-    const json = (await r.json()) as AnalyzeResponse;
-    return json;
+
+    // mēģinām nolasīt JSON neatkarīgi no statusa
+    let j: any = {};
+    try {
+      j = await r.json();
+    } catch {
+      /* ignore */
+    }
+
+    if (!r.ok || j?.ok === false) {
+      throw new Error(j?.error || `Analyze failed (HTTP ${r.status})`);
+    }
+
+    return { ok: true, data: j.data };
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Network error" };
+    if (e?.name === "AbortError") {
+      return { ok: false, error: "Request aborted" };
+    }
+    return { ok: false, error: e?.message || "Analyze failed" };
   }
 }
+
+export default { runAnalyze };
