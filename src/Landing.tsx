@@ -5,7 +5,7 @@ import Features from "./components/Features";
 import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
 
-// ✅ reālās analīzes klients
+// reālās analīzes klients
 import { runAnalyze } from "./lib/analyzeClient";
 
 type LandingProps = {
@@ -46,8 +46,7 @@ type AnalyzeData = {
     sitemapUrlGuess?: string;
     sitemapOk?: boolean | null;
   };
-  // API parasti sūta arī šo:
-  // headingsOutline?: Array<{ tag: string; text: string }>;
+  // optionally: headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
 function safePct(n?: number) {
@@ -62,6 +61,42 @@ const DEV_MODE =
   (typeof import.meta !== "undefined" &&
     (import.meta as any).env?.VITE_DEV_MODE === "1");
 
+// --- helperi ieteicamo tekstu veidošanai ---
+const clamp = (s: string, max: number) =>
+  s.length > max ? s.slice(0, max - 1) + "…" : s;
+function hostFromUrl(u?: string) {
+  try {
+    return u ? new URL(u).host : "";
+  } catch {
+    return "";
+  }
+}
+function firstHeadingText(data: any): string | undefined {
+  const ho: Array<{ tag: string; text: string }> =
+    (data as any)?.headingsOutline ?? [];
+  const h1 = ho.find((h) => h.tag?.toLowerCase() === "h1")?.text;
+  return h1 || ho[0]?.text;
+}
+function suggestMeta(data: AnalyzeData): string {
+  const base =
+    firstHeadingText(data) || data.meta?.title || "Discover our product";
+  const site = hostFromUrl(data.finalUrl || data.url);
+  // vienkāršs, drošs ieteikums 140–160 rakstzīmēs
+  let s = `${base} — ${site}. Explore features, pricing and FAQs. Get started in minutes.`;
+  if (s.length < 140) s += " Fast, secure and user-friendly.";
+  return clamp(s, 160);
+}
+function canonicalSuggestion(data: AnalyzeData): string {
+  try {
+    const u = new URL(data.finalUrl || data.url || "");
+    u.hash = "";
+    u.search = "";
+    return u.toString();
+  } catch {
+    return "https://example.com/";
+  }
+}
+
 export default function Landing({
   freeReport: _freeReport,
   onRunTest,
@@ -72,42 +107,41 @@ export default function Landing({
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showResults, setShowResults] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>("Overall");
+
+  // ⬇️ “Overall” tabu NOŅEMAM → sākam ar “Sections Present”
+  const [activeTab, setActiveTab] = useState<string>("Sections Present");
+
   const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
 
-  // ✅ reālie dati + skori
+  // reālie dati + skori (Grade panelim paliek)
   const [data, setData] = useState<AnalyzeData | null>(null);
-  const [overallScore, setOverallScore] = useState<number>(73); // default
-  const [structurePct, setStructurePct] = useState<number>(76); // default
-  const [contentPct, setContentPct] = useState<number>(70); // default
+  const [overallScore, setOverallScore] = useState<number>(73); // default vizuālam
+  const [structurePct, setStructurePct] = useState<number>(76);
+  const [contentPct, setContentPct] = useState<number>(70);
 
   const previewRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // ===== score no reālajiem datiem (minimāls) =====
+  // score no reālajiem datiem (kā iepriekš)
   const computeScores = (d: AnalyzeData | null) => {
     if (!d) return { overall: 0, structure: 0, content: 0 };
     let score = 50;
-
     if (d.seo?.metaDescriptionPresent) score += 8;
     if (d.seo?.canonicalPresent) score += 6;
     if ((d.seo?.h1Count ?? 0) === 1) score += 6;
     if ((d.seo?.h2Count ?? 0) >= 2) score += 4;
-
     const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
     const twCount = Object.values(d.social?.twitter ?? {}).filter(
       Boolean
     ).length;
     score += Math.min(ogCount + twCount, 6);
-
     const imgs = d.images?.total ?? 0;
     const miss = d.images?.missingAlt ?? 0;
     if (imgs > 0) {
       const altRatio = (imgs - miss) / imgs;
-      score += Math.round(10 * altRatio); // +0..10
+      score += Math.round(10 * altRatio);
     }
-
     const links = d.links?.total ?? 0;
     if (links >= 5) score += 4;
     if (d.robots?.robotsTxtOk) score += 3;
@@ -131,45 +165,30 @@ export default function Landing({
     return { overall: score, structure, content };
   };
 
-  // ===== Heuristikas 3 TABIEM no reālajiem datiem =====
-  const derived = useMemo(() => {
-    if (!data) {
-      return {
-        sections: [] as { title: string; ok: boolean; why?: string }[],
-        quickWins: [] as { text: string; upliftPct: number }[],
-        backlog: [] as {
-          title: string;
-          impact: "low" | "med" | "high";
-          effort: string;
-          upliftPct: number;
-        }[],
-      };
-    }
-
+  // Heuristikas “Sections Present” (paliek kā bija)
+  const derivedSections = useMemo(() => {
+    const d = data;
+    if (!d) return [] as { title: string; ok: boolean; why?: string }[];
     const ho: Array<{ tag: string; text: string }> =
-      (data as any).headingsOutline ?? []; // ja API sūta
+      (d as any).headingsOutline ?? [];
     const headingsText = ho.map((h) => h.text?.toLowerCase() || "").join(" | ");
     const hHas = (kw: string | RegExp) =>
       typeof kw === "string"
         ? headingsText.includes(kw.toLowerCase())
         : kw.test(headingsText);
 
-    const metaTitle = (data.meta?.title || "").toLowerCase();
-    const metaDesc = (data.meta?.description || "").toLowerCase();
+    const metaTitle = (d.meta?.title || "").toLowerCase();
+    const metaDesc = (d.meta?.description || "").toLowerCase();
     const metaText = `${metaTitle} ${metaDesc}`;
 
-    // ---- Sections Present (heuristikas) ----
     const sections: { title: string; ok: boolean; why?: string }[] = [];
-
-    // Hero: pieņemam, ka ir, ja ir vismaz 1 H1 vai metaTitle
-    const heroOk = (data.seo?.h1Count ?? 0) >= 1 || !!metaTitle;
+    const heroOk = (d.seo?.h1Count ?? 0) >= 1 || !!metaTitle;
     sections.push({
       title: "hero",
       ok: heroOk,
       why: heroOk ? "Found H1/meta title" : "No clear H1/title",
     });
 
-    // Social proof: heading satur 'testimonials', 'reviews', 'clients', 'trusted by' u.tml.
     const socialOk = hHas(
       /testimonial|review|clients|trusted|partners|logos?/i
     );
@@ -181,7 +200,6 @@ export default function Landing({
         : "No testimonials/reviews headings",
     });
 
-    // Features: H2/H3 satur 'features'/'benefits'
     const featuresOk = hHas(/feature|benefit|what you get|capabilit(y|ies)/i);
     sections.push({
       title: "features",
@@ -189,7 +207,6 @@ export default function Landing({
       why: featuresOk ? "Headings mention features" : "No features headings",
     });
 
-    // Contact: heading satur 'contact', 'get in touch', 'support'
     const contactOk = hHas(/contact|get in touch|support|help/i);
     sections.push({
       title: "contact",
@@ -197,9 +214,8 @@ export default function Landing({
       why: contactOk ? "Found contact-related heading" : "No contact heading",
     });
 
-    // Value prop: meta title/description saprātīga (desc >= 50 simboli) vai H1 ar “we help/our product/solution”
     const valuePropOk =
-      (data.meta?.description?.length ?? 0) >= 50 ||
+      (d.meta?.description?.length ?? 0) >= 50 ||
       hHas(/we help|we (are|do)|our (product|solution)|why (choose|us)/i);
     sections.push({
       title: "value prop",
@@ -209,7 +225,6 @@ export default function Landing({
         : "Weak value statement",
     });
 
-    // Pricing: heading satur 'pricing', 'plans'
     const pricingOk = hHas(/pricing|price|plans?/i);
     sections.push({
       title: "pricing",
@@ -217,7 +232,6 @@ export default function Landing({
       why: pricingOk ? "Found pricing/plans heading" : "No pricing section",
     });
 
-    // FAQ
     const faqOk = hHas(/faq|frequently asked|questions/i);
     sections.push({
       title: "faq",
@@ -225,9 +239,8 @@ export default function Landing({
       why: faqOk ? "Found FAQ heading" : "No FAQ heading",
     });
 
-    // Footer: konservatīvi — ja iekš linkiem ir ≥8 un ir “privacy” vai “terms” kāds no headingiem
     const footerOk =
-      (data.links?.total ?? 0) >= 8 &&
+      (d.links?.total ?? 0) >= 8 &&
       (hHas(/privacy|terms/i) ||
         metaText.includes("privacy") ||
         metaText.includes("terms"));
@@ -237,177 +250,261 @@ export default function Landing({
       why: footerOk ? "Likely footer links" : "Footer not detected",
     });
 
-    // ---- Quick Wins (top-3 pēc ietekmes) ----
-    type Win = { text: string; uplift: number; key: string };
-    const wins: Win[] = [];
+    return sections;
+  }, [data]);
 
-    if (!data.seo?.metaDescriptionPresent) {
-      wins.push({
-        key: "meta-desc",
-        uplift: 8,
-        text: "Add a unique meta description (140–160 chars).",
-      });
-    } else if ((data.meta?.description?.length ?? 0) < 80) {
-      wins.push({
-        key: "meta-desc-short",
-        uplift: 5,
-        text: "Enrich the meta description to ~150 chars with a clear value prop.",
-      });
+  // Quick Wins: “Esošais vs Ieteicamais”
+  const quickWinsRows = useMemo(() => {
+    const rows: { field: string; current: string; suggested: string }[] = [];
+    const d = data;
+
+    // Meta description
+    if (d) {
+      const desc = d.meta?.description;
+      if (!desc) {
+        rows.push({
+          field: "Meta description",
+          current: "Nav atrasts",
+          suggested: suggestMeta(d),
+        });
+      } else {
+        let note = "";
+        if (desc.length < 140) note = " (par īsu — ieteicams ~150 rakstzīmes)";
+        if (desc.length > 160) note = " (par garu — ≤160 rakstzīmes)";
+        rows.push({
+          field: "Meta description",
+          current: clamp(desc, 200) + note,
+          suggested: suggestMeta(d),
+        });
+      }
     }
 
-    if ((data.seo?.h1Count ?? 0) !== 1) {
-      wins.push({
-        key: "h1-count",
-        uplift: 6,
-        text: "Ensure exactly one H1 that matches the primary intent.",
-      });
-    }
-
-    if (!data.seo?.canonicalPresent) {
-      wins.push({
-        key: "canonical",
-        uplift: 4,
-        text: "Add a canonical URL to prevent duplicate content issues.",
-      });
-    }
-
-    const imgs = data.images?.total ?? 0;
-    const miss = data.images?.missingAlt ?? 0;
-    if (imgs > 0 && miss > 0) {
+    // ALT teksti
+    const imgs = d?.images?.total ?? 0;
+    const miss = d?.images?.missingAlt ?? 0;
+    if (imgs > 0) {
       const ratio = Math.round((miss / Math.max(1, imgs)) * 100);
-      wins.push({
-        key: "alt",
-        uplift: 5,
-        text: `Add ALT text to images (missing on ~${ratio}% images).`,
+      rows.push({
+        field: "Image ALT texts",
+        current:
+          miss > 0
+            ? `Trūkst: ${miss}/${imgs} (~${ratio}%)`
+            : "OK — ALT pārsvarā ir",
+        suggested:
+          'Pievienot īsus, aprakstošus ALT (piem., “Produkts – galvenā īpašība”). Dekoratīviem attēliem alt="".',
       });
     }
 
-    if (!data.robots?.robotsTxtOk) {
-      wins.push({
-        key: "robots",
-        uplift: 3,
-        text: "Publish /robots.txt to control crawler access.",
-      });
-    }
-    if (!data.robots?.sitemapOk) {
-      wins.push({
-        key: "sitemap",
-        uplift: 3,
-        text: "Publish /sitemap.xml and reference it in robots.txt.",
+    // H1
+    const h1c = d?.seo?.h1Count ?? 0;
+    rows.push({
+      field: "H1 virsraksti",
+      current: `${h1c} uz lapu`,
+      suggested: "Nodrošināt tieši 1 H1 ar galveno nolūku/atslēgvārdu.",
+    });
+
+    // Canonical
+    const hasCanonical = !!d?.seo?.canonicalPresent || !!d?.meta?.canonical;
+    rows.push({
+      field: "Canonical",
+      current: hasCanonical ? d!.meta!.canonical || "Ir" : "Nav",
+      suggested: hasCanonical
+        ? "Pārbaudīt vai norāda uz kanonisko bez parametriem"
+        : `Pievienot <link rel="canonical" href="${canonicalSuggestion(d!)}">`,
+    });
+
+    // Robots/Sitemap
+    rows.push({
+      field: "robots.txt",
+      current: d?.robots?.robotsTxtOk ? "OK" : "Nav/nesasniedzams",
+      suggested: d?.robots?.robotsTxtOk
+        ? "Pievienot arī sitemap norādi robots.txt failā"
+        : "Publicēt /robots.txt ar piemērotiem noteikumiem",
+    });
+    rows.push({
+      field: "sitemap.xml",
+      current: d?.robots?.sitemapOk ? "OK" : "Nav/nesasniedzams",
+      suggested: d?.robots?.sitemapOk
+        ? "Sekot, lai sitemap atjaunojas automātiski"
+        : "Publicēt /sitemap.xml un norādīt to robots.txt",
+    });
+
+    // Social tags
+    const ogCount = Object.values(d?.social?.og ?? {}).filter(Boolean).length;
+    const twCount = Object.values(d?.social?.twitter ?? {}).filter(
+      Boolean
+    ).length;
+    rows.push({
+      field: "Social meta (OG/Twitter)",
+      current:
+        ogCount + twCount > 0
+          ? `Daļēji (${ogCount + twCount} lauki)`
+          : "Trūkst",
+      suggested:
+        "Pievienot og:title, og:description, og:image, og:url, twitter:card u.c. kopīgošanas bagātinājumiem.",
+    });
+
+    // Internal links
+    const total = d?.links?.total ?? 0;
+    const internal = d?.links?.internal ?? 0;
+    rows.push({
+      field: "Iekšējās saites",
+      current: `Kopā ${total} · Iekšējās ${internal}`,
+      suggested:
+        "Vismaz 5+ iekšējās saites uz galvenajām lapām (produkts, cenas, kontakti, FAQ).",
+    });
+
+    return rows;
+  }, [data]);
+
+  // Backlog: “Esošais vs Ieteicamais” + prioritāte/effort
+  const backlogRows = useMemo(() => {
+    const rows: {
+      task: string;
+      current: string;
+      suggested: string;
+      priority: "low" | "med" | "high";
+      effort: string;
+    }[] = [];
+    const d = data;
+
+    // Secinājumi balstīti uz tiem pašiem Quick Wins + papildinājumi
+    const h1c = d?.seo?.h1Count ?? 0;
+    if (h1c !== 1) {
+      rows.push({
+        task: "H1 struktūra",
+        current: `${h1c} H1 uz lapu`,
+        suggested: "Iestatīt tieši 1 H1 ar skaidru vērtības piedāvājumu.",
+        priority: "high",
+        effort: "1–2h",
       });
     }
 
-    if ((data.links?.total ?? 0) < 5) {
-      wins.push({
-        key: "internal-links",
-        uplift: 4,
-        text: "Add internal links to key pages (min. 5).",
+    if (
+      !d?.seo?.metaDescriptionPresent ||
+      (d.meta?.description &&
+        (d.meta.description.length < 140 || d.meta.description.length > 160))
+    ) {
+      rows.push({
+        task: "Meta description",
+        current: d?.meta?.description ? clamp(d.meta.description, 200) : "Nav",
+        suggested: suggestMeta(d!),
+        priority: "med",
+        effort: "1–2h",
       });
     }
 
-    // If no obvious social tags:
-    const ogCount = Object.values(data.social?.og ?? {}).filter(Boolean).length;
-    const twCount = Object.values(data.social?.twitter ?? {}).filter(
+    if (!d?.seo?.canonicalPresent) {
+      rows.push({
+        task: "Canonical",
+        current: "Nav",
+        suggested: canonicalSuggestion(d!),
+        priority: "med",
+        effort: "1h",
+      });
+    }
+
+    const imgs = d?.images?.total ?? 0;
+    const miss = d?.images?.missingAlt ?? 0;
+    if (imgs > 0 && miss > 0) {
+      rows.push({
+        task: "ALT teksti",
+        current: `Trūkst: ${miss}/${imgs}`,
+        suggested:
+          "Pievienot ALT visiem nedekoratīviem attēliem; īss, aprakstošs teksts.",
+        priority: "med",
+        effort: "2–4h",
+      });
+    }
+
+    if (!d?.robots?.robotsTxtOk) {
+      rows.push({
+        task: "robots.txt",
+        current: "Nav/nesasniedzams",
+        suggested: "Publicēt /robots.txt un iekļaut sitemap norādi.",
+        priority: "med",
+        effort: "1h",
+      });
+    }
+    if (!d?.robots?.sitemapOk) {
+      rows.push({
+        task: "sitemap.xml",
+        current: "Nav/nesasniedzams",
+        suggested:
+          "Publicēt /sitemap.xml (dinamiski ģenerētu) un norādīt robots.txt.",
+        priority: "med",
+        effort: "1–2h",
+      });
+    }
+
+    const ogCount = Object.values(d?.social?.og ?? {}).filter(Boolean).length;
+    const twCount = Object.values(d?.social?.twitter ?? {}).filter(
       Boolean
     ).length;
     if (ogCount + twCount < 3) {
-      wins.push({
-        key: "social-tags",
-        uplift: 3,
-        text: "Add OpenGraph/Twitter meta tags for rich sharing.",
+      rows.push({
+        task: "Social meta",
+        current:
+          ogCount + twCount > 0 ? `Daļēji (${ogCount + twCount})` : "Trūkst",
+        suggested: "og:title, og:description, og:image, og:url, twitter:card",
+        priority: "low",
+        effort: "1–2h",
       });
     }
 
-    const quickWins = wins
-      .sort((a, b) => b.uplift - a.uplift)
-      .slice(0, 3)
-      .map((w) => ({ text: w.text, upliftPct: w.uplift }));
-
-    // ---- Prioritized Backlog (no quick wins + papildinājumi) ----
-    type Task = {
-      title: string;
-      impact: "low" | "med" | "high";
-      effort: string;
-      uplift: number;
-      key: string;
-    };
-    const backlogAll: Task[] = [];
-
-    // Mapējam no wins ar aptuveniem effortiem
-    const effortFor = (key: string): string =>
-      ((
-        {
-          "meta-desc": "1–2h",
-          "meta-desc-short": "1h",
-          "h1-count": "1–2h",
-          canonical: "1h",
-          alt: "2–4h",
-          robots: "1h",
-          sitemap: "1–2h",
-          "internal-links": "2–4h",
-          "social-tags": "1–2h",
-        } as Record<string, string>
-      )[key] || "1–2h");
-
-    const impactFor = (uplift: number): "low" | "med" | "high" =>
-      uplift >= 6 ? "high" : uplift >= 4 ? "med" : "low";
-
-    for (const w of wins) {
-      backlogAll.push({
-        key: w.key,
-        title: w.text,
-        impact: impactFor(w.uplift),
-        effort: effortFor(w.key),
-        uplift: w.uplift,
+    const total = d?.links?.total ?? 0;
+    const internal = d?.links?.internal ?? 0;
+    if (internal < 5) {
+      rows.push({
+        task: "Iekšējās saites",
+        current: `Iekšējās ${internal} no ${total}`,
+        suggested: "Pievienot 5–10 iekšējās saites uz galvenajām ceļa lapām.",
+        priority: "med",
+        effort: "2–4h",
       });
     }
 
-    // Papildus uzdevumi pēc headings (ja trūkst sekciju)
-    if (!pricingOk)
-      backlogAll.push({
-        key: "pricing-sec",
-        title: "Add a clear Pricing/Plans section.",
-        impact: "med",
+    // papildus: ja nav Pricing/FAQ/Social proof sekcijas (no “Sections Present”)
+    const secMap = Object.fromEntries(
+      derivedSections.map((s) => [s.title, s.ok])
+    );
+    if (secMap["pricing"] === false) {
+      rows.push({
+        task: "Pricing/Plans sadaļa",
+        current: "Nav atrasta",
+        suggested: "Pievienot skaidru cenu plānu salīdzinājumu ar CTA.",
+        priority: "med",
         effort: "1–2d",
-        uplift: 6,
       });
-    if (!faqOk)
-      backlogAll.push({
-        key: "faq-sec",
-        title: "Add an FAQ section to address objections.",
-        impact: "med",
+    }
+    if (secMap["faq"] === false) {
+      rows.push({
+        task: "FAQ sadaļa",
+        current: "Nav atrasta",
+        suggested: "Pievienot 6–10 biežākos jautājumus ar īsām atbildēm.",
+        priority: "med",
         effort: "0.5–1d",
-        uplift: 4,
       });
-    if (!socialOk)
-      backlogAll.push({
-        key: "social-proof-sec",
-        title: "Add testimonials or client logos for trust.",
-        impact: "high",
+    }
+    if (secMap["social proof"] === false) {
+      rows.push({
+        task: "Testimonials/Logos",
+        current: "Nav atrasti",
+        suggested: "Pievienot klientu atsauksmes vai logo rindu (min. 6).",
+        priority: "high",
         effort: "1–2d",
-        uplift: 8,
       });
+    }
 
-    const backlog = backlogAll
-      .sort((a, b) => b.uplift - a.uplift)
-      .slice(0, 6)
-      .map((t) => ({
-        title: t.title,
-        impact: t.impact,
-        effort: t.effort,
-        upliftPct: t.uplift,
-      }));
+    return rows;
+  }, [data, derivedSections]);
 
-    return { sections, quickWins, backlog };
-  }, [data]);
-
-  // ===== progress animācija =====
+  // progress animācija
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, []);
-
   function startProgress() {
     setProgress(0);
     const tick = () => {
@@ -421,17 +518,16 @@ export default function Landing({
     rafRef.current = requestAnimationFrame(tick);
   }
 
-  // ===== reāls tests =====
+  // reāls tests
   const normalizeUrl = (u: string) =>
     u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
-
   const runTestReal = async () => {
     if (!url.trim()) return;
     const normalized = normalizeUrl(url);
     setLastTestedUrl(normalized);
 
     // reset
-    setActiveTab("Overall");
+    setActiveTab("Sections Present"); // ⬅️ vairs ne “Overall”
     setShowResults(false);
     setLoading(true);
     setErr(null);
@@ -469,13 +565,12 @@ export default function Landing({
       setShowResults(false);
     }
   };
-
   const handleRun = () => {
     if (!url.trim()) return;
     runTestReal();
   };
 
-  // === DEV → Full report links ===
+  // DEV → Full report links
   const resolvedAuditUrl =
     lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
   const orderFullInternal = () => {
@@ -491,7 +586,7 @@ export default function Landing({
     window.location.href = href;
   };
 
-  // ---- UI helpers ----
+  // UI helpers
   const TabButton = ({ name }: { name: string }) => (
     <button
       type="button"
@@ -644,7 +739,6 @@ export default function Landing({
         ref={previewRef}
         className="mx-auto max-w-[1200px] px-3 md:px-4 py-10 md:py-14"
       >
-        {/* === Animētais status bar arī pirms rezultātiem === */}
         {loading && !showResults ? (
           <div className="rounded-2xl border bg-white p-5">
             <div className="text-slate-700 font-medium">
@@ -666,7 +760,7 @@ export default function Landing({
           </div>
         ) : (
           <>
-            {/* Grade + sub-scores (no reāliem datiem) */}
+            {/* Grade + sub-scores */}
             <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
               <div className="rounded-2xl border bg-white p-5 md:p-6">
                 <div className="flex items-center justify-between">
@@ -688,7 +782,7 @@ export default function Landing({
                   <span className="ml-3 text-slate-500">Grade (auto)</span>
                 </div>
 
-                {/* Reālo datu īss kopsavilkums */}
+                {/* īss kopsavilkums */}
                 {data && (
                   <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm text-slate-700">
                     <div className="rounded-xl border p-3">
@@ -788,7 +882,7 @@ export default function Landing({
             <div className="mt-6">
               <div className="flex gap-2 pl-2">
                 {[
-                  "Overall",
+                  // "Overall", // ⬅️ NOŅEMTS
                   "Sections Present",
                   "Quick Wins",
                   "Prioritized Backlog",
@@ -801,11 +895,11 @@ export default function Landing({
               </div>
 
               <div className="border border-t-0 rounded-b-xl bg-white p-4">
-                {/* --- Sections Present: balstīts uz reāliem datiem --- */}
+                {/* Sections Present (kā bija) */}
                 {activeTab === "Sections Present" && (
                   <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-                    {(derived.sections.length
-                      ? derived.sections
+                    {(derivedSections.length
+                      ? derivedSections
                       : [
                           { title: "hero", ok: true },
                           { title: "social proof", ok: false },
@@ -837,92 +931,127 @@ export default function Landing({
                   </div>
                 )}
 
-                {/* --- Quick Wins: top-3 no reālajiem datiem --- */}
+                {/* Quick Wins → Esošais vs Ieteicamais */}
                 {activeTab === "Quick Wins" && (
-                  <ul className="space-y-2">
-                    {(derived.quickWins.length
-                      ? derived.quickWins
-                      : [
-                          {
-                            text: "Add a unique meta description (140–160 chars).",
-                            upliftPct: 6,
-                          },
-                          {
-                            text: "Ensure exactly one H1 that matches the primary intent.",
-                            upliftPct: 5,
-                          },
-                          { text: "Add ALT text to images.", upliftPct: 4 },
-                        ]
-                    ).map((q, i) => (
-                      <li
-                        key={i}
-                        className="flex items-start justify-between gap-3 rounded-xl border p-3"
-                      >
-                        <span className="text-slate-700">{q.text}</span>
-                        <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                          ≈ +{q.upliftPct}% leads
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border text-sm">
+                      <thead>
+                        <tr className="bg-slate-50">
+                          <th className="p-2 border text-left">Lauks</th>
+                          <th className="p-2 border text-left">Esošais</th>
+                          <th className="p-2 border text-left">Ieteicamais</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(quickWinsRows.length
+                          ? quickWinsRows
+                          : [
+                              {
+                                field: "Meta description",
+                                current: "Nav atrasts",
+                                suggested:
+                                  "Pievienot ~150 rakstzīmju aprakstu ar vērtības solījumu.",
+                              },
+                              {
+                                field: "Image ALT texts",
+                                current: "Trūkst ALT vairākos attēlos",
+                                suggested:
+                                  "Pievienot ALT tekstus visiem nedekoratīviem attēliem.",
+                              },
+                              {
+                                field: "Canonical",
+                                current: "Nav",
+                                suggested:
+                                  'Pievienot <link rel="canonical"> uz kanonisko URL.',
+                              },
+                            ]
+                        ).map((r, i) => (
+                          <tr key={i}>
+                            <td className="p-2 border align-top">{r.field}</td>
+                            <td className="p-2 border align-top">
+                              {r.current}
+                            </td>
+                            <td className="p-2 border align-top">
+                              {r.suggested}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
 
-                {/* --- Backlog: prioritizēts pēc ietekmes, ar effort --- */}
+                {/* Prioritized Backlog → Esošais vs Ieteicamais + Prioritāte/Effort */}
                 {activeTab === "Prioritized Backlog" && (
-                  <div className="grid md:grid-cols-2 gap-3">
-                    {(derived.backlog.length
-                      ? derived.backlog
-                      : [
-                          {
-                            title: "Add a canonical URL",
-                            impact: "med",
-                            effort: "1h",
-                            upliftPct: 4,
-                          },
-                          {
-                            title: "Publish /sitemap.xml",
-                            impact: "med",
-                            effort: "1–2h",
-                            upliftPct: 3,
-                          },
-                          {
-                            title: "Add ALT text to images",
-                            impact: "med",
-                            effort: "2–4h",
-                            upliftPct: 5,
-                          },
-                        ]
-                    ).map((b, i) => (
-                      <div key={i} className="rounded-xl border p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-medium">{b.title}</div>
-                            <div className="mt-1 text-sm text-slate-600">
-                              Impact:{" "}
+                  <div className="overflow-x-auto">
+                    <table className="w-full border text-sm">
+                      <thead>
+                        <tr className="bg-slate-50">
+                          <th className="p-2 border text-left">Uzdevums</th>
+                          <th className="p-2 border text-left">Esošais</th>
+                          <th className="p-2 border text-left">Ieteicamais</th>
+                          <th className="p-2 border text-left">Prioritāte</th>
+                          <th className="p-2 border text-left">Effort</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(backlogRows.length
+                          ? backlogRows
+                          : ([
+                              {
+                                task: "Canonical",
+                                current: "Nav",
+                                suggested: "Pievienot kanonisko URL",
+                                priority: "med",
+                                effort: "1h",
+                              },
+                              {
+                                task: "Sitemap",
+                                current: "Nav",
+                                suggested:
+                                  "Publicēt /sitemap.xml un norādīt robots.txt",
+                                priority: "med",
+                                effort: "1–2h",
+                              },
+                              {
+                                task: "ALT teksti",
+                                current: "Trūkst daudzviet",
+                                suggested: "Pievienot ALT visiem attēliem",
+                                priority: "med",
+                                effort: "2–4h",
+                              },
+                            ] as any)
+                        ).map((r: any, i: number) => (
+                          <tr key={i}>
+                            <td className="p-2 border align-top">{r.task}</td>
+                            <td className="p-2 border align-top">
+                              {r.current}
+                            </td>
+                            <td className="p-2 border align-top">
+                              {r.suggested}
+                            </td>
+                            <td className="p-2 border align-top">
                               <span
                                 className={
-                                  b.impact === "high"
+                                  r.priority === "high"
                                     ? "text-rose-600"
-                                    : b.impact === "med"
+                                    : r.priority === "med"
                                     ? "text-amber-600"
                                     : "text-emerald-600"
                                 }
                               >
-                                {b.impact}
-                              </span>{" "}
-                              • Effort: {b.effort}
-                            </div>
-                          </div>
-                          <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                            ≈ +{b.upliftPct}% leads
-                          </span>
-                        </div>
-                      </div>
-                    ))}
+                                {r.priority}
+                              </span>
+                            </td>
+                            <td className="p-2 border align-top">{r.effort}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
 
-                {/* Pārējie tab saglabājas kā iepriekš */}
+                {/* Pārējie tab paliek blur (netiek mainīti) */}
                 {BLUR_TABS.has(activeTab) && (
                   <BlurPanel>
                     <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
