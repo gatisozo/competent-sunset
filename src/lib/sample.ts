@@ -1,153 +1,160 @@
+// src/lib/sample.ts
+// Parauga dati, kas atbilst tipiem no ./analyze
+
 import type {
   FullReport,
-  Impact,
   Suggestion,
   ContentAuditItem,
+  BacklogItem,
 } from "./analyze";
 
-/** Helpers */
-const hi: Impact = "high";
-const med: Impact = "medium";
-const low: Impact = "low";
-
-function mshot(u: string) {
-  const abs = u.startsWith("http") ? u : `https://${u}`;
-  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(abs)}?w=1200`;
-}
-
-/** Reusable suggestion snippets */
-const heroSuggestions: Suggestion[] = [
+export const sampleFindings: Suggestion[] = [
   {
-    title: "Hero value unclear",
-    impact: hi,
+    title: "Hero Section Needs Improvement",
+    impact: "high",
     recommendation:
-      "State the core benefit in the first line and keep CTAs above the fold.",
+      "Use one strong H1, clear value proposition, and a primary CTA above the fold.",
   },
   {
-    title: "Weak CTA contrast",
-    impact: med,
+    title: "Insufficient Social Proof",
+    impact: "medium",
     recommendation:
-      "Increase color contrast and add hover/focus styles to the primary button.",
+      "Add testimonials, case-studies, or client logos to build trust.",
   },
   {
-    title: "Slow hero image",
-    impact: low,
+    title: "Meta Description Not Optimal",
+    impact: "low",
     recommendation:
-      "Serve responsive images (srcset) and consider preloading the hero asset.",
+      "Re-write to ~150 characters with the main benefit and brand.",
   },
 ];
 
-const nextSectionSuggestions: Suggestion[] = [
+export const sampleContentAudit: ContentAuditItem[] = [
   {
-    title: "Value prop is vague",
-    impact: med,
-    recommendation: "Use concrete outcomes and remove filler text.",
-  },
-  {
-    title: "Missing trust indicators",
-    impact: med,
-    recommendation: "Add testimonials or client logos for social proof.",
-  },
-];
-
-const findings: Suggestion[] = [
-  ...heroSuggestions,
-  ...nextSectionSuggestions.slice(0, 1),
-];
-
-const contentAudit: ContentAuditItem[] = [
-  {
-    section: "hero",
+    section: "Hero",
     present: true,
     quality: "poor",
-    suggestion: "Tighten headline; add strong CTA.",
+    suggestion: "Add a single clear H1 and a primary CTA.",
   },
   {
-    section: "value prop",
+    section: "Value Prop",
     present: true,
-    quality: "ok",
-    suggestion: "Clarify copy with measurable outcomes.",
+    quality: "good",
+    suggestion: "Keep meta description ~150 chars.",
   },
   {
-    section: "social proof",
+    section: "Social Proof",
     present: false,
-    suggestion: "Add 2–3 testimonials or client logos.",
+    quality: "poor",
+    suggestion: "Add testimonials or client logos.",
   },
   {
-    section: "features",
-    present: true,
-    quality: "ok",
-    suggestion: "Group features into 3–5 bullets with benefits.",
-  },
-  {
-    section: "pricing",
+    section: "Pricing",
     present: false,
-    suggestion: "Add pricing info or a clear 'Talk to sales' alternative.",
+    quality: "poor",
+    suggestion: "Show pricing or provide a pricing CTA.",
   },
+  { section: "Features", present: true, quality: "good" },
   {
-    section: "faq",
-    present: true,
-    quality: "ok",
-    suggestion: "Use accordion for readability and link to policies.",
+    section: "Faq",
+    present: false,
+    quality: "poor",
+    suggestion: "Add a FAQ section (8–10 questions).",
   },
-  { section: "contact", present: true, quality: "good" },
-  { section: "footer", present: true, quality: "good" },
+  { section: "Contact", present: true, quality: "good" },
+  { section: "Footer", present: true, quality: "good" },
+  {
+    section: "Images",
+    present: true,
+    quality: "poor",
+    suggestion: "Add ALT text to non-decorative images.",
+  },
 ];
 
-export function sampleFull(url: string): FullReport {
-  const shot = mshot(url);
+export const sampleQuickWins: string[] = [
+  "Add a single clear H1 + primary CTA above the fold. (≈ +12%)",
+  "Fix meta description to ~150 chars with benefits. (≈ +4%)",
+  "Add ALT text to images (≈ +3% leads).",
+  "Add 5–10 internal links to key pages. (≈ +3%)",
+  "Add OpenGraph/Twitter meta for better sharing. (≈ +1–2%)",
+];
 
-  return {
-    page: { url, title: "Sample Landing Page" },
-    assets: { screenshot_url: shot },
-    score: 74,
-    sections_detected: {
-      hero: true,
-      value_prop: true,
-      social_proof: false,
-      features: true,
-      pricing: false,
-      faq: true,
-      contact: true,
-      footer: true,
-    },
-    hero: { suggestions: heroSuggestions },
-    next_section: { name: "value prop", suggestions: nextSectionSuggestions },
-    findings,
-    quick_wins: [
-      "Compress hero image",
-      "Move CTA above the fold",
-      "Add social proof",
-    ],
-    content_audit: contentAudit,
-    prioritized_backlog: [
-      {
-        title: "Revise hero section copy",
-        impact: hi,
-        effort_days: 2,
-        eta_days: 5,
-        lift_percent: 20,
-      },
-      {
-        title: "Integrate testimonials",
-        impact: med,
-        effort_days: 3,
-        eta_days: 7,
-        lift_percent: 10,
-      },
-      {
-        title: "Improve navigation flow",
-        impact: med,
-        effort_days: 2,
-        eta_days: 4,
-        lift_percent: 5,
-      },
-    ],
-    screenshots: {
-      hero: shot,
-      sections: {
-        hero: shot,
-      },
-    },
-  };
-}
+export const sampleBacklog: BacklogItem[] = [
+  {
+    title: "Revamp the Hero Section",
+    impact: 3,
+    effort_days: 2,
+    eta_days: 10,
+    lift_percent: 20,
+    notes: "Strong value prop, single H1, prominent CTA and benefit bullets.",
+  },
+  {
+    title: "Implement a Testimonial Slider",
+    impact: 2,
+    effort_days: 3,
+    eta_days: 7,
+    lift_percent: 10,
+    notes: "Collect 6–10 quotes with names/roles; add logo row if available.",
+  },
+  {
+    title: "Re-write Meta Description",
+    impact: 1,
+    effort_days: 1,
+    eta_days: 2,
+    lift_percent: 4,
+    notes: "Aim for 145–160 chars with benefit + brand.",
+  },
+];
+
+export const sampleFullReport: FullReport = {
+  page: { url: "https://example.com", title: "Example — Just another site" },
+  assets: {
+    screenshot_url:
+      "https://s.wordpress.com/mshots/v1/https%3A%2F%2Fexample.com?w=1200",
+  },
+  screenshots: {
+    hero: "https://s.wordpress.com/mshots/v1/https%3A%2F%2Fexample.com?w=1200",
+  },
+  sections_detected: {
+    hero: true,
+    value_prop: true,
+    social_proof: false,
+    pricing: false,
+    features: true,
+    faq: false,
+    contact: true,
+    footer: true,
+  },
+  findings: sampleFindings,
+  content_audit: sampleContentAudit,
+  quick_wins: sampleQuickWins,
+  prioritized_backlog: sampleBacklog,
+  meta: {
+    title: "Example — Just another site",
+    description: "This is an example site used for demo purposes.",
+    lang: "en",
+    viewport: "width=device-width, initial-scale=1",
+    canonical: "https://example.com/",
+  },
+  seo: {
+    h1Count: 1,
+    h2Count: 4,
+    h3Count: 6,
+    canonicalPresent: true,
+    metaDescriptionPresent: true,
+  },
+  images: { total: 12, missingAlt: 3 },
+  links: { total: 45, internal: 30, external: 15 },
+  social: {
+    og: { "og:title": "Example" },
+    twitter: { "twitter:card": "summary_large_image" },
+  },
+  robots: {
+    robotsTxtUrl: "https://example.com/robots.txt",
+    robotsTxtOk: true,
+    sitemapOk: true,
+  },
+  text_snippets:
+    "Welcome to Example. Our product helps you do X. Pricing, Features, Contact...",
+  score: 78,
+};

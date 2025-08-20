@@ -152,7 +152,6 @@ type SectionsDetected = Record<
 >;
 
 function deriveSectionsDetected(r: any): SectionsDetected {
-  // prefer backend value; fallback to heuristics
   const s: SectionsDetected = {
     hero: !!r?.sections_detected?.hero || (r?.seo?.h1Count ?? 0) > 0,
     value_prop:
@@ -199,7 +198,12 @@ function deriveContentAudit(r: any): ContentAuditItem[] {
     {
       section: "Hero",
       present: s.hero,
-      quality: s.hero && ((r?.seo?.h1Count ?? 0) === 1 ? "good" : "poor"),
+      // FIX: nekad neatgriezt boolean; vienmēr "good" | "poor"
+      quality: s.hero
+        ? (r?.seo?.h1Count ?? 0) === 1
+          ? "good"
+          : "poor"
+        : "poor",
       suggestion:
         s.hero && (r?.seo?.h1Count ?? 0) === 1
           ? undefined
@@ -208,12 +212,7 @@ function deriveContentAudit(r: any): ContentAuditItem[] {
     {
       section: "Value Prop",
       present: s.value_prop,
-      quality:
-        s.value_prop && mdLen >= 120 && mdLen <= 180
-          ? "good"
-          : s.value_prop
-          ? "poor"
-          : "poor",
+      quality: s.value_prop && mdLen >= 120 && mdLen <= 180 ? "good" : "poor",
       suggestion: s.value_prop
         ? "Refine the meta description to ~150 chars with a clear benefit."
         : "Add a clear value statement in the hero/meta description.",
@@ -535,7 +534,6 @@ export default function FullReportView() {
   // derive/enrich
   const report = useMemo(() => {
     const r: any = raw || {};
-    // enrich fields unconditionally (non-destructive)
     r.sections_detected = deriveSectionsDetected(r);
     r.content_audit = deriveContentAudit(r);
     r.findings = deriveFindings(r);
@@ -560,7 +558,6 @@ export default function FullReportView() {
   }, [report]);
 
   const quickWinsLiftPct = useMemo(() => {
-    // aptuvena summa no atslēgvārdiem iekš quick wins
     const wins: string[] = ((report as any)?.quick_wins || []) as string[];
     let total = 0;
     wins.forEach((w) => {
@@ -718,16 +715,17 @@ export default function FullReportView() {
                   onError={heroImg.onError}
                   className={heroImg.loading ? "opacity-0" : "opacity-100"}
                 />
-                {Array.isArray(topHeroSuggestions) &&
-                  topHeroSuggestions.length > 0 && (
+                {Array.isArray((report as any)?.findings) &&
+                  (report as any).findings.length > 0 && (
                     <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
                       <div className="font-medium mb-1">
                         Top hero suggestions
                       </div>
                       <ul className="space-y-1">
-                        {topHeroSuggestions
+                        {((report as any).findings as Suggestion[])
+                          .filter((s) => isHeroFinding(s.title))
                           .slice(0, 3)
-                          .map((s: any, i: number) => (
+                          .map((s, i) => (
                             <li key={i}>
                               • <b>{s.title}</b> — {s.recommendation}
                             </li>
