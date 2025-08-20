@@ -1,4 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
+import {
+  type FullReport,
+  type Suggestion,
+  type ContentAuditItem,
+} from "../lib/analyze";
 
 /* ---------------- utilities ---------------- */
 function getQS(name: string): string | null {
@@ -21,8 +26,8 @@ function animateNumber(
   to: number,
   ms = 900
 ) {
-  const start = performance.now();
-  const delta = to - from;
+  const start = performance.now(),
+    delta = to - from;
   const tick = (now: number) => {
     const t = clamp((now - start) / ms, 0, 1);
     const eased = easeOutCubic(t);
@@ -38,221 +43,206 @@ const heroCropImg: React.CSSProperties = {
   width: "100%",
   height: "100%",
   objectFit: "cover",
-  objectPosition: "top center",
+  objectPosition: "top",
 };
-
-/* -------------- types -------------- */
-type Impact = "high" | "medium" | "low";
-type Finding = { title: string; impact: Impact; recommendation: string };
-type BacklogItem = {
-  title: string;
-  impact: Impact;
-  eta_days?: number;
-};
-type FullReport = {
-  url: string;
-  title?: string;
-  score?: number;
-  summary?: string;
-  key_findings: Finding[];
-  quick_wins?: string[];
-  prioritized_backlog?: BacklogItem[];
-  content_audit?: Array<any>;
-  screenshots?: { hero?: string | null } | null;
-};
-
-/* -------------- screenshot URL handling -------------- */
-function buildScreenshotUrl(target: string) {
-  const url = /^https?:\/\//i.test(target) ? target : `https://${target}`;
-  const tmpl =
-    (import.meta as any).env?.VITE_SCREENSHOT_URL_TMPL ||
-    (typeof process !== "undefined" &&
-      (process as any).env?.SCREENSHOT_URL_TMPL);
-  if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
-  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
-}
-function withCacheBuster(u: string) {
-  const sep = u.includes("?") ? "&" : "?";
-  return `${u}${sep}cb=${Date.now()}`;
-}
-function useSmartImage(
-  primary?: string | null,
-  backup?: string | null
-): {
-  src?: string;
-  loading: boolean;
-  onLoad: (e?: any) => void;
-  onError: () => void;
-} {
-  const [src, setSrc] = useState<string | undefined>(
-    primary || backup || undefined
+function isHeroFinding(title: string) {
+  const t = title.toLowerCase();
+  return (
+    t.includes("hero") ||
+    t.includes("above the fold") ||
+    t.includes("headline") ||
+    t.includes("cta") ||
+    t.includes("primary button")
   );
-  const [loading, setLoading] = useState<boolean>(!!src);
+}
+function hasMeaningfulIssues(
+  findings: { title: string }[] = [],
+  audit?: { section: string; status: "ok" | "weak" | "missing" }[]
+) {
+  const hf = findings.some((f) => isHeroFinding(f.title));
+  const wk = (audit || []).some((c) => c.status !== "ok");
+  return hf || wk;
+}
+
+/* -------------- scoring -------------- */
+function computeScore(
+  findings: Suggestion[] = [],
+  audit: ContentAuditItem[] = []
+) {
+  let score = 100;
+  for (const f of findings)
+    score -= f.impact === "high" ? 10 : f.impact === "medium" ? 5 : 2;
+  for (const c of audit)
+    score -= c.status === "missing" ? 5 : c.status === "weak" ? 2 : 0;
+  return clamp(Math.round(score), 0, 100);
+}
+const impactToLift: Record<number, string> = {
+  3: "≈ +20% leads",
+  2: "≈ +10% leads",
+  1: "≈ +5% leads",
+};
+
+/* -------------- smart screenshot (spinner + retry + backup) -------------- */
+function useSmartScreenshot(primary?: string | null, backup?: string | null) {
+  const [src, setSrc] = useState<string | null>(primary || null);
+  const [loading, setLoading] = useState<boolean>(!!primary);
   const [retries, setRetries] = useState(0);
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 6;
 
   useEffect(() => {
-    setSrc(primary || backup || undefined);
-    setLoading(!!(primary || backup));
+    setSrc(primary || null);
+    setLoading(!!primary);
     setRetries(0);
-  }, [primary, backup]);
+  }, [primary]);
 
-  useEffect(() => {
-    if (!src) setLoading(false);
-  }, [src]);
+  const appendCb = (u: string) => {
+    try {
+      const url = new URL(u);
+      url.searchParams.set("cb", String(Date.now()));
+      return url.toString();
+    } catch {
+      return u + (u.includes("?") ? "&" : "?") + "cb=" + Date.now();
+    }
+  };
 
-  const onLoad = (e?: any) => {
-    const img = e?.currentTarget as HTMLImageElement;
-    const looksTiny = img?.naturalWidth <= 300 || img?.naturalHeight <= 200;
-    if (looksTiny && retries < MAX_RETRIES && src) {
+  const onLoad: React.ReactEventHandler<HTMLImageElement> = (e) => {
+    const img = e.currentTarget;
+    const isTiny = img.naturalWidth <= 300 || img.naturalHeight <= 200;
+    const looksGif = (src || "").toLowerCase().includes(".gif");
+
+    if ((isTiny || looksGif) && retries < MAX_RETRIES && src) {
       setTimeout(() => {
-        setSrc(withCacheBuster(src));
+        setSrc(appendCb(src));
         setRetries((r) => r + 1);
       }, 1500);
       return;
     }
     setLoading(false);
   };
+
   const onError = () => {
     if (backup && src !== backup) {
-      setSrc(withCacheBuster(backup));
+      setSrc(appendCb(backup));
       setLoading(true);
       return;
     }
     if (src && retries < MAX_RETRIES) {
-      setSrc(withCacheBuster(src));
+      setSrc(appendCb(src));
       setRetries((r) => r + 1);
     } else {
       setLoading(false);
     }
   };
+
   return { src, loading, onLoad, onError };
 }
 
-/* -------------- scoring -------------- */
-function letterFromScore(n: number) {
-  if (n >= 90) return "A";
-  if (n >= 80) return "B";
-  if (n >= 70) return "C";
-  if (n >= 60) return "D";
-  return "F";
-}
-
-// drošs aprēķins, ja backend neatgriež score
-function computeScoreSafe(findings: any[] = [], audit: any[] = []) {
-  let score = 100;
-  for (const f of findings) {
-    const imp = (f?.impact as Impact) || "medium";
-    score -= imp === "high" ? 10 : imp === "medium" ? 5 : 2;
-  }
-  for (const c of audit) {
-    const st = (c as any)?.status as "ok" | "weak" | "missing" | undefined;
-    if (st === "missing") score -= 5;
-    else if (st === "weak") score -= 2;
-  }
-  return clamp(Math.round(score), 0, 100);
-}
-function scoreBarColor(n: number) {
-  if (n >= 80) return "bg-emerald-500";
-  if (n >= 60) return "bg-amber-500";
-  return "bg-rose-500";
-}
-
-/* -------------- main component -------------- */
+/* -------------- component -------------- */
 export default function FullReportView() {
-  const autostart = getQS("autostart") === "1";
-  const qUrl = getQS("url") || "";
-
-  const [url, setUrl] = useState<string>(qUrl ? qUrl : "");
-  const [report, setReport] = useState<FullReport | null>(null);
+  const [url, setUrl] = useState<string>(() => getQS("url") || "");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [score, setScore] = useState(0);
+  const [error, setError] = useState<string>("");
+  const [report, setReport] = useState<FullReport | null>(null);
+  const [displayScore, setDisplayScore] = useState(0);
 
-  const heroPrimary = useMemo(
-    () =>
-      report?.screenshots?.hero
-        ? report.screenshots.hero
-        : url
-        ? buildScreenshotUrl(url)
-        : undefined,
-    [report?.screenshots?.hero, url]
-  );
-  const heroBackup = useMemo(
-    () =>
-      url
-        ? `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`
-        : undefined,
-    [url]
-  );
-  const heroImg = useSmartImage(heroPrimary, heroBackup);
+  // analyze on load only if url exists in QS
+  useEffect(() => {
+    const qsUrl = getQS("url");
+    if (qsUrl) startStreaming(qsUrl, "full");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // re-animate score when report arrives
+  useEffect(() => {
+    if (!report) return;
+    const target = computeScore(report.findings, report.content_audit || []);
+    animateNumber(setDisplayScore, displayScore, target, 900);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report]);
+
+  /* ---------- streaming ---------- */
+  function startStreaming(u: string, mode: "free" | "full" = "full") {
+    try {
+      setLoading(true);
+      setError("");
+      setProgress(0);
+      setReport(null);
+
+      const base = "/api/analyze-stream";
+      const src = `${base}?url=${encodeURIComponent(
+        u
+      )}&mode=${mode}&sid=${Date.now()}`;
+
+      const es = new EventSource(src);
+
+      es.addEventListener("progress", (e: any) => {
+        try {
+          const { value } = JSON.parse(e.data);
+          setProgress(value ?? 0);
+        } catch {}
+      });
+      es.addEventListener("result", (e: any) => {
+        try {
+          const data = JSON.parse(e.data);
+          setReport(data);
+          setProgress(100);
+        } catch (err: any) {
+          setError("Invalid result format");
+        } finally {
+          es.close();
+          setLoading(false);
+        }
+      });
+      es.addEventListener("error", (e: any) => {
+        try {
+          const data = e.data ? JSON.parse(e.data) : null;
+          setError(data?.message || "Stream error");
+        } catch {
+          setError("Stream error");
+        } finally {
+          es.close();
+          setLoading(false);
+        }
+      });
+      es.onerror = () => {
+        /* handled above */
+      };
+    } catch (err: any) {
+      setError(err?.message || "Could not start stream");
+      setLoading(false);
+    }
+  }
+
+  /* ---------- handlers ---------- */
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && url.trim()) startStreaming(url.trim(), "full");
+  };
+  const runAnalyze = () => {
+    if (url.trim()) startStreaming(url.trim(), "full");
+  };
+
+  /* ---------- derived ---------- */
+  const findings = (report?.findings || []) as Suggestion[];
+  const contentAudit = report?.content_audit as ContentAuditItem[] | undefined;
+
+  const screenshotUrl = report?.assets?.screenshot_url || null;
+  const screenshotBackup =
+    (report as any)?.assets?.screenshot_url_backup || null;
+  const suggestedShot = report?.assets?.suggested_screenshot_url || null;
+
+  const shot = useSmartScreenshot(screenshotUrl, screenshotBackup);
+
+  const topHeroSuggestions = useMemo(() => {
+    const heroOnes = findings.filter((f) => isHeroFinding(f.title));
+    return (heroOnes.length ? heroOnes : findings).slice(0, 3);
+  }, [findings]);
+
+  // Quick-wins overall lift = 3% per item (cap 30%) — visible big pill
   const quickWinsLiftPct = useMemo(() => {
     const n = report?.quick_wins?.length ?? 0;
     return Math.min(30, n * 3);
   }, [report?.quick_wins]);
-
-  async function startStream(u: string, mode: "full" | "free" = "full") {
-    const target = /^https?:\/\//i.test(u) ? u : `https://${u}`;
-    setLoading(true);
-    setProgress(0);
-    setReport(null);
-
-    const src = `/api/analyze-stream?url=${encodeURIComponent(
-      target
-    )}&mode=${mode}&sid=${Date.now()}`;
-
-    const es = new EventSource(src);
-
-    es.addEventListener("progress", (e: any) => {
-      try {
-        const { value } = JSON.parse(e.data);
-        setProgress(value ?? 0);
-      } catch {}
-    });
-
-    es.addEventListener("result", (e: any) => {
-      try {
-        const data = JSON.parse(e.data) as FullReport;
-        setReport(data);
-        setProgress(100);
-
-        const baseScore =
-          typeof data.score === "number"
-            ? data.score
-            : computeScoreSafe(
-                data.key_findings || [],
-                data.content_audit || []
-              );
-        animateNumber(setScore, 0, baseScore, 800);
-      } catch (err: any) {
-        console.error(err);
-        alert("Invalid result format");
-      } finally {
-        es.close();
-        setLoading(false);
-      }
-    });
-
-    es.addEventListener("error", (e: any) => {
-      try {
-        const data = e.data ? JSON.parse(e.data) : null;
-        console.error("stream error", data || e);
-      } catch {}
-      es.close();
-      setLoading(false);
-      alert("Stream failed.");
-    });
-  }
-
-  useEffect(() => {
-    if (autostart && qUrl) {
-      startStream(qUrl, "full");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autostart, qUrl]);
-
-  const gradeLetter = letterFromScore(score);
 
   return (
     <div className="mx-auto max-w-6xl px-3 md:px-4 py-8">
@@ -264,207 +254,296 @@ export default function FullReportView() {
             onClick={() => window.print()}
             className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
           >
-            Print / Save PDF
+            Download PDF
           </button>
           <button
-            onClick={() => alert("TODO: send PDF")}
-            className="px-3 py-2 rounded-lg bg-[#FFDDD2] text-slate-900 hover:opacity-90 text-sm"
+            onClick={() => alert("Email sending is not configured yet.")}
+            className="px-3 py-2 rounded-lg bg-[#006D77] text-white text-sm"
           >
-            Send PDF
+            Email PDF
           </button>
         </div>
       </div>
 
-      {/* URL input — FORM, lai Enter strādā */}
-      <form
-        className="flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          startStream(url, "full");
-        }}
-      >
-        <input
-          value={url}
-          placeholder="https://example.com"
-          onChange={(e) => setUrl(e.target.value)}
-          className="flex-1 rounded-lg border px-3 py-2 bg-white"
-          type="url"
-        />
-        <button
-          type="submit"
-          className="rounded-lg bg-[#006D77] text-white px-4 py-2 disabled:opacity-60"
-          disabled={loading || !url.trim()}
-        >
-          {loading ? "Analyzing…" : "Analyze"}
-        </button>
-      </form>
+      {/* Controls */}
+      <div className="flex flex-col gap-2 mb-4">
+        <div className="flex gap-2">
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={onKey}
+            placeholder="yourdomain.com"
+            className="flex-1 rounded-lg px-3 py-2 bg-white border outline-none focus:ring-2 focus:ring-[#83C5BE]"
+          />
+          <button
+            disabled={loading || !url.trim()}
+            onClick={runAnalyze}
+            className="rounded-lg px-4 py-2 bg-[#006D77] text-white disabled:opacity-60"
+          >
+            {loading ? "Analyzing…" : "Analyze"}
+          </button>
+        </div>
 
-      {/* Loader */}
-      {loading && (
-        <div className="mt-4 rounded-xl border bg-white p-5">
-          <div className="text-slate-700 font-medium">
-            Generating full report…
-          </div>
-          <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
+        {/* Streaming progress */}
+        {loading && (
+          <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
             <div
-              className="h-full bg-[#006D77] transition-all"
+              className="h-full bg-[#006D77] transition-[width] duration-200"
               style={{ width: `${progress}%` }}
             />
           </div>
-          <div className="mt-2 text-sm text-slate-600">
-            Progress: {progress}%
-          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 text-red-700 p-3 text-sm">
+          {error}
         </div>
       )}
 
-      {/* Report */}
-      {report && !loading && (
-        <div className="mt-6 grid md:grid-cols-[1fr,0.6fr] gap-6">
-          {/* MAIN */}
-          <div className="rounded-2xl border bg-white p-5">
-            <div className="text-sm text-slate-500">URL</div>
-            <div className="text-slate-800 break-all">{report.url}</div>
-
-            {report.summary && (
-              <p className="mt-3 text-slate-700">{report.summary}</p>
-            )}
-
-            {/* HERO snapshot */}
-            <div className="mt-4">
-              <div className="text-sm text-slate-500">Hero snapshot</div>
-              <div className={heroCropWrap}>
-                {heroImg.src ? (
-                  <img
-                    src={heroImg.src}
-                    alt="Hero snapshot"
-                    style={heroCropImg}
-                    onLoad={heroImg.onLoad}
-                    onError={heroImg.onError}
-                  />
-                ) : (
-                  <div className="h-full grid place-items-center text-slate-400">
-                    no image
-                  </div>
-                )}
-              </div>
-              {heroImg.loading && (
-                <div className="mt-2 text-xs text-slate-500">
-                  Loading screenshot…
-                </div>
+      {/* Main grid */}
+      <div className="grid md:grid-cols-3 gap-4">
+        {/* Left: page + hero visual + findings */}
+        <div className="md:col-span-2 space-y-4">
+          {/* Page meta */}
+          {report?.page && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-xs text-slate-500">URL</div>
+              <div className="truncate">{report.page.url}</div>
+              {report.page.title && (
+                <>
+                  <div className="mt-2 text-xs text-slate-500">Title</div>
+                  <div className="">{report.page.title}</div>
+                </>
               )}
             </div>
+          )}
 
-            {/* Findings */}
-            <div className="mt-6">
-              <div className="text-sm text-slate-500">Key Findings</div>
-              <div className="mt-2 space-y-3">
-                {report.key_findings.map((f: Finding, i: number) => (
-                  <div key={i} className="rounded-xl border p-3">
-                    <div className="flex items-center gap-2">
+          {/* Visual: hero snapshot (cropped) */}
+          {hasMeaningfulIssues(findings, contentAudit) && screenshotUrl && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium">Hero Snapshot (top of page)</div>
+              <div className="text-sm text-slate-600">
+                Cropped to the first viewport for clarity. Suggestions overlay
+                shows the most impactful fixes.
+              </div>
+
+              <div className={`${heroCropWrap} relative mt-2`}>
+                {/* Spinner overlay while loading */}
+                {shot.loading && (
+                  <div className="absolute inset-0 grid place-items-center bg-white/60">
+                    <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
+                  </div>
+                )}
+
+                {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                <img
+                  src={shot.src || undefined}
+                  style={heroCropImg}
+                  onLoad={shot.onLoad}
+                  onError={shot.onError}
+                  className={
+                    shot.loading
+                      ? "opacity-0 transition-opacity duration-300"
+                      : "opacity-100 transition-opacity duration-300"
+                  }
+                />
+
+                {/* Overlay: top hero suggestions */}
+                {topHeroSuggestions.length > 0 && (
+                  <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                    <div className="font-medium mb-1">Top hero suggestions</div>
+                    <ul className="space-y-1">
+                      {topHeroSuggestions.map((s, i) => (
+                        <li key={i}>
+                          • <b>{s.title}</b> — {s.recommendation}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-1 text-xs text-slate-500">
+                * We show screenshots only for sections with issues. Currently
+                cropping to the hero area.
+              </div>
+            </div>
+          )}
+
+          {/* Findings list */}
+          {findings.length > 0 && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium mb-2">Findings</div>
+              <div className="grid gap-3">
+                {findings.map((f, i) => (
+                  <div
+                    key={i}
+                    className="p-4 rounded-lg border bg-white flex items-start gap-3"
+                  >
+                    <div className="pt-1">
                       <span
                         className={clsx(
-                          "h-2 w-2 rounded-full",
-                          f.impact === "high"
-                            ? "bg-rose-500"
-                            : f.impact === "medium"
-                            ? "bg-amber-500"
-                            : "bg-emerald-500"
+                          "px-2 py-0.5 rounded text-xs font-medium",
+                          f.impact === "high" && "bg-red-100 text-red-700",
+                          f.impact === "medium" &&
+                            "bg-amber-100 text-amber-700",
+                          f.impact === "low" &&
+                            "bg-emerald-100 text-emerald-700"
                         )}
-                      />
-                      <div className="font-medium">{f.title}</div>
+                      >
+                        {(f.impact || "low").toUpperCase()}
+                      </span>
                     </div>
-                    <div className="text-sm text-slate-600 mt-1">
-                      {f.recommendation}
+                    <div>
+                      <div className="font-medium">{f.title}</div>
+                      <div className="text-sm text-slate-600 mt-1">
+                        {f.recommendation}
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
+          )}
+
+          {/* Content audit */}
+          {contentAudit && contentAudit.length > 0 && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium mb-2">Content Audit</div>
+              <div className="grid gap-3">
+                {contentAudit.map((c, i) => (
+                  <div key={i} className="p-4 rounded-lg border bg-white">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium capitalize">
+                        {c.section.replace(/_/g, " ")}
+                      </span>
+                      <span
+                        className={clsx(
+                          "text-xs px-2 py-0.5 rounded",
+                          c.status === "ok" &&
+                            "bg-emerald-100 text-emerald-700",
+                          c.status === "weak" && "bg-amber-100 text-amber-700",
+                          c.status === "missing" && "bg-red-100 text-red-700"
+                        )}
+                      >
+                        {c.status}
+                      </span>
+                    </div>
+                    {c.rationale && (
+                      <div className="text-sm text-slate-600 mt-1">
+                        {c.rationale}
+                      </div>
+                    )}
+                    {c.suggestions && c.suggestions.length > 0 && (
+                      <ul className="text-sm text-slate-700 mt-2 list-disc pl-5">
+                        {c.suggestions.map((s, j) => (
+                          <li key={j}>{s}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: score + sections + quick wins + backlog */}
+        <div className="space-y-4">
+          {/* Score (animated) */}
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm text-slate-600">Score</div>
+            <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
+              <div
+                className="h-full bg-[#006D77]"
+                style={{ width: `${clamp(displayScore, 0, 100)}%` }}
+              />
+            </div>
+            <div className="mt-1 text-sm">{Math.round(displayScore)} / 100</div>
+            {loading && (
+              <div className="mt-1 text-xs text-slate-500">
+                Streaming analysis…
+              </div>
+            )}
           </div>
 
-          {/* ASIDE */}
-          <aside className="rounded-2xl border bg-white p-5 space-y-5">
-            <div>
-              <div className="text-sm text-slate-500">Your Website’s Grade</div>
-              <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                <div
-                  className={clsx("h-full", scoreBarColor(score))}
-                  style={{ width: `${score}%` }}
-                />
-              </div>
-              <div className="mt-2 text-sm">
-                {score} / 100 • Grade {gradeLetter}
+          {/* Sections present */}
+          {report?.sections_detected && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium mb-2">Sections Present</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                {Object.entries(report.sections_detected).map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2">
+                    <span
+                      className={clsx(
+                        "h-2 w-2 rounded-full",
+                        v ? "bg-emerald-500" : "bg-slate-300"
+                      )}
+                    />
+                    <span className="capitalize">{k.replace(/_/g, " ")}</span>
+                  </div>
+                ))}
               </div>
             </div>
+          )}
 
-            {/* Quick Wins */}
-            <div>
-              <div className="text-sm text-slate-500">Quick Wins</div>
-              <ul className="mt-2 space-y-2">
-                {(report.quick_wins || []).map((w: string, i: number) => (
-                  <li
-                    key={i}
-                    className="flex items-start justify-between gap-3 rounded-xl border p-3"
-                  >
-                    <span className="text-sm text-slate-700">{w}</span>
-                    <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                      ≈ +10% leads
-                    </span>
-                  </li>
+          {/* Quick wins + overall lift */}
+          {report?.quick_wins && report.quick_wins.length > 0 && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="flex items-center justify-between">
+                <div className="font-medium">Quick Wins</div>
+                <div className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                  ≈ +{quickWinsLiftPct}% leads (if all done)
+                </div>
+              </div>
+              <ul className="text-sm text-slate-700 list-disc pl-5 mt-2">
+                {report.quick_wins.map((q, i) => (
+                  <li key={i}>{q}</li>
                 ))}
               </ul>
-              <div className="mt-2 text-xs text-slate-600">
-                Estimated total if all completed: ≈ +{quickWinsLiftPct}% leads
-              </div>
             </div>
+          )}
 
-            {/* Backlog */}
-            <div>
-              <div className="text-sm text-slate-500">Prioritized Backlog</div>
-              <div className="mt-2 space-y-2">
-                {(report.prioritized_backlog || []).map(
-                  (b: BacklogItem, i: number) => (
-                    <div key={i} className="rounded-lg border px-3 py-2">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-medium text-sm">{b.title}</div>
-                          <div className="text-xs text-slate-600">
-                            Impact: {b.impact}
-                            {typeof (b as any)?.effort === "string"
-                              ? ` • Effort: ${(b as any).effort}`
-                              : ""}
-                            {typeof b.eta_days === "number"
-                              ? ` • ETA: ${b.eta_days}d`
-                              : ""}
-                          </div>
-                        </div>
-                        <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                          ≈ +
-                          {b.impact === "high"
-                            ? 20
-                            : b.impact === "medium"
-                            ? 10
-                            : 5}
-                          % leads
+          {/* Backlog with big conversion-lift badges */}
+          {report?.prioritized_backlog &&
+            report.prioritized_backlog.length > 0 && (
+              <div className="rounded-xl border bg-white p-3">
+                <div className="font-medium mb-2">Prioritized Backlog</div>
+                <div className="space-y-3">
+                  {report.prioritized_backlog.map((b, i) => (
+                    <div key={i} className="border rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-medium">{b.title}</div>
+                        <span className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                          {impactToLift[b.impact] || "Potential lift"}
                         </span>
                       </div>
+                      <div className="mt-2 text-xs text-slate-600 flex flex-wrap items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-slate-100">
+                          Impact {b.impact}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-slate-100">
+                          Effort {b.effort}
+                        </span>
+                        {"eta_days" in b && (
+                          <span className="px-2 py-0.5 rounded bg-slate-100">
+                            {b.eta_days}d
+                          </span>
+                        )}
+                      </div>
+                      {b.notes && (
+                        <div className="mt-1 text-sm text-slate-600">
+                          {b.notes}
+                        </div>
+                      )}
                     </div>
-                  )
-                )}
+                  ))}
+                </div>
               </div>
-            </div>
-
-            <div>
-              <button
-                onClick={() => alert("TODO: implement PDF sender")}
-                className="w-full rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
-              >
-                Send PDF
-              </button>
-            </div>
-          </aside>
+            )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
