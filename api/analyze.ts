@@ -1,6 +1,5 @@
 // api/analyze.ts
-export const runtime = "edge";
-
+// Vercel Node Function (compatible with Node.js runtime on Vercel)
 type Ok<T> = { ok: true; data: T };
 type Err = { ok: false; error: string; code?: string };
 
@@ -38,21 +37,24 @@ type AnalyzeResult = {
   headingsOutline: Array<{ tag: string; text: string }>;
 };
 
-const JSON_HEADERS = {
-  "content-type": "application/json; charset=utf-8",
-  "cache-control": "no-store",
-};
+function json(res: any, status: number, body: any) {
+  res
+    .status(status)
+    .setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.send(JSON.stringify(body));
+}
 
 function normalizeUrl(input: string): URL {
   let s = (input ?? "").trim();
   if (!s) throw new Error('Missing "url" parameter');
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
   const u = new URL(s);
-  if (!["http:", "https:"].includes(u.protocol)) {
+  if (!["http:", "https:"].includes(u.protocol))
     throw new Error("Only http(s) URLs are allowed");
-  }
   return u;
 }
+
 function stripTags(s: string): string {
   return s
     .replace(/<[^>]*>/g, "")
@@ -78,6 +80,7 @@ function attrOf(tag: string, name: string): string | undefined {
 }
 async function headOrGetOk(url: string, init?: RequestInit) {
   try {
+    // Node 18+ has global fetch on Vercel
     let r = await fetch(url, { method: "HEAD", redirect: "follow", ...init });
     if (r.ok) return true;
     r = await fetch(url, { method: "GET", redirect: "follow", ...init });
@@ -87,15 +90,16 @@ async function headOrGetOk(url: string, init?: RequestInit) {
   }
 }
 
-export default async function handler(req: Request): Promise<Response> {
+// Default export for Vercel Node Function
+export default async function handler(req: any, res: any) {
   try {
-    const method = req.method.toUpperCase();
-    const { searchParams } = new URL(req.url);
+    const method = (req.method || "GET").toUpperCase();
 
-    let inputUrl = searchParams.get("url") ?? "";
-    if (method === "POST" && !inputUrl) {
-      const body = await req.json().catch(() => ({} as any));
-      inputUrl = (body?.url ?? "").toString();
+    let inputUrl = "";
+    if (method === "GET") {
+      inputUrl = (req.query?.url ?? "").toString();
+    } else if (method === "POST") {
+      inputUrl = (req.body?.url ?? "").toString();
     }
 
     let target: URL;
@@ -107,13 +111,10 @@ export default async function handler(req: Request): Promise<Response> {
         error: e?.message || "Invalid URL",
         code: "INVALID_URL",
       };
-      return new Response(JSON.stringify(err), {
-        status: 400,
-        headers: JSON_HEADERS,
-      });
+      return json(res, 400, err);
     }
 
-    // Fetch page (timeout 15s)
+    // Fetch page (timeout approx via AbortController)
     const controller = new AbortController();
     const tm = setTimeout(() => controller.abort(), 15000);
     const ua =
@@ -136,20 +137,18 @@ export default async function handler(req: Request): Promise<Response> {
         error: `Failed to fetch target: ${e?.message ?? "fetch failed"}`,
         code: "FETCH_ERROR",
       };
-      return new Response(JSON.stringify(err), {
-        status: 502,
-        headers: JSON_HEADERS,
-      });
+      return json(res, 502, err);
     } finally {
       clearTimeout(tm);
     }
 
-    const status = resp.status;
+    const status = (resp as any).status;
     const html = await resp.text();
     const head = html.slice(0, 200_000);
 
     const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(head);
     const title = titleMatch ? stripTags(titleMatch[1]) : undefined;
+
     const metaContent = (n: string) => {
       const re = new RegExp(
         `<meta[^>]+(?:name|property)\\s*=\\s*["']${n}["'][^>]*?(?:content\\s*=\\s*("([^"]*)"|'([^']*)'))?[^>]*>`,
@@ -192,15 +191,16 @@ export default async function handler(req: Request): Promise<Response> {
     for (let level = 1; level <= 6; level++) {
       const r = new RegExp(`<h${level}[^>]*>([\\s\\S]*?)<\\/h${level}>`, "gi");
       let m: RegExpExecArray | null;
-      while ((m = r.exec(html)))
+      while ((m = r.exec(html))) {
         headings.push({ tag: `h${level}`, text: stripTags(m[1]) });
+      }
     }
     const h1Count = headings.filter((h) => h.tag === "h1").length;
     const h2Count = headings.filter((h) => h.tag === "h2").length;
     const h3Count = headings.filter((h) => h.tag === "h3").length;
 
     // Links
-    const origin = new URL(resp.url).origin;
+    const origin = new URL((resp as any).url || target.toString()).origin;
     const aChunks = extractBetween(html, "<a", ">");
     let linksTotal = 0,
       linksInternal = 0,
@@ -229,7 +229,7 @@ export default async function handler(req: Request): Promise<Response> {
     }
 
     // robots/sitemap (best effort)
-    const site = new URL(resp.url);
+    const site = new URL((resp as any).url || target.toString());
     const robotsTxtUrl = `${site.origin}/robots.txt`;
     const sitemapGuess = `${site.origin}/sitemap.xml`;
     const robotsTxtOk = await headOrGetOk(robotsTxtUrl);
@@ -237,7 +237,7 @@ export default async function handler(req: Request): Promise<Response> {
 
     const data: AnalyzeResult = {
       url: target.toString(),
-      finalUrl: resp.url,
+      finalUrl: (resp as any).url || target.toString(),
       fetchedAt: new Date().toISOString(),
       httpStatus: status,
       meta: { title, description, lang, viewport, canonical },
@@ -265,19 +265,13 @@ export default async function handler(req: Request): Promise<Response> {
     };
 
     const ok: Ok<AnalyzeResult> = { ok: true, data };
-    return new Response(JSON.stringify(ok), {
-      status: 200,
-      headers: JSON_HEADERS,
-    });
+    return json(res, 200, ok);
   } catch (e: any) {
     const err: Err = {
       ok: false,
       error: e?.message ?? "Unknown error",
       code: "UNEXPECTED",
     };
-    return new Response(JSON.stringify(err), {
-      status: 500,
-      headers: JSON_HEADERS,
-    });
+    return json(res, 500, err);
   }
 }

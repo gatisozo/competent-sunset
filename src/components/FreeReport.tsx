@@ -1,3 +1,4 @@
+// src/components/FreeReport.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { runAnalyze } from "../lib/analyzeClient";
 import { StatusBar } from "./StatusBar";
@@ -289,7 +290,7 @@ export default function FreeReport() {
             </section>
           </div>
 
-          {/* Vienkāršs score vizuāli */}
+          {/* Simple score */}
           <section className="border rounded p-3">
             <h3 className="font-medium mb-1">Score (auto)</h3>
             <div className="text-sm">

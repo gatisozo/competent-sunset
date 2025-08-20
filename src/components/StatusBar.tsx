@@ -1,3 +1,4 @@
+// src/components/StatusBar.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 
 type Step = { label: string; at: number };

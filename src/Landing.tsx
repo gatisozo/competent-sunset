@@ -1,14 +1,51 @@
-import React, { useRef, useState } from "react";
+// src/Landing.tsx
+import React, { useRef, useState, useEffect, useMemo } from "react";
 import GradeBadge from "./components/GradeBadge";
 import Features from "./components/Features";
 import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
+
+// ✅ pievienojam reālās analīzes klientu
+import { runAnalyze } from "./lib/analyzeClient";
 
 type LandingProps = {
   freeReport?: any;
   onRunTest?: (url: string) => Promise<void> | void;
   onOrderFull?: () => void;
   onSeeSample?: () => void;
+};
+
+type AnalyzeData = {
+  finalUrl?: string;
+  url?: string;
+  fetchedAt?: string;
+  httpStatus?: number;
+  meta?: {
+    title?: string;
+    description?: string;
+    lang?: string;
+    viewport?: string;
+    canonical?: string;
+  };
+  seo?: {
+    h1Count?: number;
+    h2Count?: number;
+    h3Count?: number;
+    canonicalPresent?: boolean;
+    metaDescriptionPresent?: boolean;
+  };
+  social?: {
+    og?: Record<string, string | undefined>;
+    twitter?: Record<string, string | undefined>;
+  };
+  links?: { total?: number; internal?: number; external?: number };
+  images?: { total?: number; missingAlt?: number };
+  robots?: {
+    robotsTxtUrl?: string;
+    robotsTxtOk?: boolean | null;
+    sitemapUrlGuess?: string;
+    sitemapOk?: boolean | null;
+  };
 };
 
 function safePct(n?: number) {
@@ -35,13 +72,18 @@ export default function Landing({
   const [showResults, setShowResults] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("Overall");
   const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
+  const [err, setErr] = useState<string | null>(null);
+
+  // ✅ reālie dati + aprēķinātie skori
+  const [data, setData] = useState<AnalyzeData | null>(null);
+  const [overallScore, setOverallScore] = useState<number>(73); // default kā iepriekš
+  const [structurePct, setStructurePct] = useState<number>(76); // default kā iepriekš
+  const [contentPct, setContentPct] = useState<number>(70); // default kā iepriekš
+
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const rafRef = useRef<number | null>(null);
 
-  // --- Demo dati (mock; aizstāj ar reāliem, ja nepieciešams) ---
-  const demoScore = 73;
-  const structurePct = 76;
-  const contentPct = 70;
-
+  // --- Demo “UI” saraksti atstājam, tos nedaram dinamiskus šajā solī ---
   const sectionsPresent = [
     { title: "hero", ok: true },
     { title: "social proof", ok: true },
@@ -52,15 +94,11 @@ export default function Landing({
     { title: "faq", ok: true },
     { title: "footer", ok: true },
   ];
-
-  // Quick Wins ar % ieguvumiem
   const quickWins: { text: string; upliftPct: number }[] = [
     { text: "Add testimonials to build credibility.", upliftPct: 6 },
     { text: "Improve navigation structure for ease of access.", upliftPct: 4 },
     { text: "Enhance FAQ section with clearer formatting.", upliftPct: 3 },
   ];
-
-  // Prioritized backlog ar % ieguvumiem
   const backlog = [
     {
       title: "Revise Hero Section Copy",
@@ -98,53 +136,126 @@ export default function Landing({
   const shotExists = true;
 
   const normalizeUrl = (u: string) =>
-    u.startsWith("http") ? u : `https://${u}`;
+    u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
 
-  // ===== RUN TEST + animētais progress =====
-  const runTestDemo = () => {
+  // ✅ score aprēķins no reālajiem datiem (minimāli invazīvs)
+  const computeScores = (d: AnalyzeData | null) => {
+    if (!d) return { overall: 0, structure: 0, content: 0 };
+    let score = 50;
+
+    if (d.seo?.metaDescriptionPresent) score += 8;
+    if (d.seo?.canonicalPresent) score += 6;
+    if ((d.seo?.h1Count ?? 0) === 1) score += 6;
+    if ((d.seo?.h2Count ?? 0) >= 2) score += 4;
+
+    const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
+    const twCount = Object.values(d.social?.twitter ?? {}).filter(
+      Boolean
+    ).length;
+    score += Math.min(ogCount + twCount, 6);
+
+    const imgs = d.images?.total ?? 0;
+    const miss = d.images?.missingAlt ?? 0;
+    if (imgs > 0) {
+      const altRatio = (imgs - miss) / imgs;
+      score += Math.round(10 * altRatio); // +0..10
+    }
+
+    const links = d.links?.total ?? 0;
+    if (links >= 5) score += 4;
+    if (d.robots?.robotsTxtOk) score += 3;
+    if (d.robots?.sitemapOk) score += 3;
+
+    // vienkārši sub-score
+    let structure = 30;
+    structure += Math.min(20, (d.seo?.h2Count ?? 0) * 4);
+    structure += d.seo?.canonicalPresent ? 10 : 0;
+    structure = Math.min(100, Math.max(0, structure));
+
+    let content = 30;
+    content += d.seo?.metaDescriptionPresent ? 15 : 0;
+    content += Math.min(15, imgs > 0 ? 10 : 0);
+    content += Math.min(
+      10,
+      imgs > 0 ? Math.round(10 * ((imgs - miss) / Math.max(1, imgs))) : 0
+    );
+    content = Math.min(100, Math.max(0, content));
+
+    score = Math.min(100, Math.max(0, score));
+    return { overall: score, structure, content };
+  };
+
+  // ===== progress animācija (līdz ~90% kamēr gaidām) =====
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  function startProgress() {
+    setProgress(0);
+    const tick = () => {
+      setProgress((p) => {
+        if (!loading) return p;
+        const next = Math.min(90, p + Math.random() * 6 + 1);
+        return next;
+      });
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }
+
+  // ===== reāls tests (AIZVIETO demo runTestDemo) =====
+  const runTestReal = async () => {
     if (!url.trim()) return;
-    const normalized = normalizeUrl(url.trim());
+    const normalized = normalizeUrl(url);
     setLastTestedUrl(normalized);
 
     // reset
     setActiveTab("Overall");
     setShowResults(false);
     setLoading(true);
-    setProgress(0);
-
-    // demo ilgums
-    const duration = 12000; // 12s demo
-    const start = Date.now();
-
-    const tick = () => {
-      const p = Math.min(1, (Date.now() - start) / duration);
-      setProgress(Math.round(p * 100));
-      if (p < 1) {
-        requestAnimationFrame(tick);
-      } else {
-        setLoading(false);
-        setShowResults(true);
-        setTimeout(() => {
-          previewRef.current?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-        }, 120);
-      }
-    };
-    requestAnimationFrame(tick);
+    setErr(null);
+    setData(null);
+    startProgress();
 
     // opc. callback
     if (onRunTest) {
       try {
-        Promise.resolve(onRunTest(normalizeUrl(url))).catch(() => {});
+        await Promise.resolve(onRunTest(normalized));
       } catch {}
+    }
+
+    // reālais API izsaukums
+    const res = await runAnalyze(normalized);
+    setLoading(false);
+
+    if (res.ok) {
+      const d = res.data as AnalyzeData;
+      setData(d);
+      const sc = computeScores(d);
+      setOverallScore(sc.overall);
+      setStructurePct(sc.structure);
+      setContentPct(sc.content);
+
+      setProgress(100);
+      setShowResults(true);
+      setTimeout(() => {
+        previewRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 120);
+    } else {
+      setErr(res.error || "Analyze failed");
+      setProgress(0);
+      setShowResults(false);
     }
   };
 
   const handleRun = () => {
     if (!url.trim()) return;
-    runTestDemo();
+    runTestReal();
   };
 
   // === DEV workflow → Full report ar autostartu un pēdējo testēto URL ===
@@ -198,141 +309,11 @@ export default function Landing({
     </div>
   );
 
-  const TabsArea = () => (
-    <div className="mt-6">
-      <div className="flex gap-2 pl-2">
-        {[
-          "Overall",
-          "Sections Present",
-          "Quick Wins",
-          "Prioritized Backlog",
-          "Findings",
-          "Content Audit",
-          "Copy Suggestions",
-        ].map((t) => (
-          <TabButton key={t} name={t} />
-        ))}
-      </div>
-
-      <div className="border border-t-0 rounded-b-xl bg-white p-4">
-        {/* OVERALL */}
-        {activeTab === "Overall" && (
-          <div className="text-slate-700">
-            {loading ? (
-              // === Animētais status bar iekš "Overall" ===
-              <div className="rounded-xl border bg-white p-5">
-                <div className="text-slate-700 font-medium">
-                  Analyzing your site…
-                </div>
-                <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
-                  <div
-                    className="h-full bg-[#006D77] transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-                <div className="mt-2 text-sm text-slate-600">
-                  Progress: {progress}% • Estimated time: ~
-                  {Math.max(1, Math.ceil((100 - progress) / 8))}s
-                </div>
-              </div>
-            ) : shotExists ? (
-              <div className="rounded-xl overflow-hidden border">
-                <img
-                  src={heroShot}
-                  alt="Hero snapshot"
-                  className="w-full h-auto block"
-                  loading="lazy"
-                />
-              </div>
-            ) : (
-              <div className="h-48 grid place-items-center text-slate-500">
-                Run a test to see your live preview here.
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* SECTIONS */}
-        {activeTab === "Sections Present" && (
-          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {sectionsPresent.map((s, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-2 rounded-lg border px-3 py-2"
-              >
-                <span
-                  className={
-                    "h-2 w-2 rounded-full " +
-                    (s.ok ? "bg-emerald-500" : "bg-rose-500")
-                  }
-                />
-                <span className="text-sm">{s.title}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* QUICK WINS — ar % badge */}
-        {activeTab === "Quick Wins" && (
-          <ul className="space-y-2">
-            {quickWins.map((q, i) => (
-              <li
-                key={i}
-                className="flex items-start justify-between gap-3 rounded-xl border p-3"
-              >
-                <span className="text-slate-700">{q.text}</span>
-                <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                  ≈ +{q.upliftPct}% leads
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {/* BACKLOG — ar % badge */}
-        {activeTab === "Prioritized Backlog" && (
-          <div className="grid md:grid-cols-2 gap-3">
-            {backlog.map((b, i) => (
-              <div key={i} className="rounded-xl border p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-medium">{b.title}</div>
-                    <div className="mt-1 text-sm text-slate-600">
-                      Impact:{" "}
-                      <span
-                        className={
-                          b.impact === "high"
-                            ? "text-rose-600"
-                            : b.impact === "med"
-                            ? "text-amber-600"
-                            : "text-emerald-600"
-                        }
-                      >
-                        {b.impact}
-                      </span>{" "}
-                      • Effort: {b.effort}
-                    </div>
-                  </div>
-                  <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
-                    ≈ +{b.upliftPct}% leads
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* BLURRED TABS */}
-        {BLUR_TABS.has(activeTab) && (
-          <BlurPanel>
-            <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
-              {activeTab}
-            </div>
-          </BlurPanel>
-        )}
-      </div>
-    </div>
-  ); // <-- šeit beidzas TabsArea komponentes renderis, NAV liekā “}”
+  // mazs helpers reālo datu īsai rindiņai
+  const niceUrl = useMemo(
+    () => (data ? data.finalUrl || data.url || "" : ""),
+    [data]
+  );
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
@@ -460,8 +441,7 @@ export default function Landing({
               />
             </div>
             <div className="mt-2 text-sm text-slate-600">
-              Progress: {progress}% • Estimated time: ~
-              {Math.max(1, Math.ceil((100 - progress) / 8))}s
+              Progress: {progress}%
             </div>
           </div>
         ) : !showResults ? (
@@ -470,27 +450,86 @@ export default function Landing({
           </div>
         ) : (
           <>
-            {/* Grade + sub-scores */}
+            {/* Grade + sub-scores (tagad no reāliem datiem) */}
             <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
               <div className="rounded-2xl border bg-white p-5 md:p-6">
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl md:text-2xl font-semibold">
                     Your Website’s Grade
                   </h2>
-                  <GradeBadge score={demoScore} size="lg" />
+                  <GradeBadge score={overallScore} size="lg" />
                 </div>
                 <div className="mt-4 h-3 rounded-full bg-slate-200 overflow-hidden">
                   <div
                     className="h-full bg-[#006D77]"
-                    style={{ width: `${demoScore}%` }}
+                    style={{ width: `${safePct(overallScore)}%` }}
                   />
                 </div>
                 <div className="mt-3 text-slate-700">
                   <span className="text-xl font-semibold">
-                    {demoScore} / 100
+                    {safePct(overallScore)} / 100
                   </span>
-                  <span className="ml-3 text-slate-500">Grade: C (demo)</span>
+                  <span className="ml-3 text-slate-500">Grade (auto)</span>
                 </div>
+
+                {/* ✅ īss kopsavilkums no reālajiem datiem */}
+                {data && (
+                  <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm text-slate-700">
+                    <div className="rounded-xl border p-3">
+                      <div className="font-medium mb-1">Meta</div>
+                      <ul className="list-disc pl-5">
+                        <li>
+                          <b>Title:</b> {data.meta?.title ?? "—"}
+                        </li>
+                        <li>
+                          <b>Description:</b>{" "}
+                          {data.meta?.description
+                            ? `${data.meta.description.slice(0, 160)}${
+                                data.meta.description.length > 160 ? "…" : ""
+                              }`
+                            : "—"}
+                        </li>
+                        <li>
+                          <b>Canonical:</b> {data.meta?.canonical ?? "—"}
+                        </li>
+                      </ul>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <div className="font-medium mb-1">Headings</div>
+                      <div>
+                        H1 / H2 / H3: {data.seo?.h1Count ?? 0} /{" "}
+                        {data.seo?.h2Count ?? 0} / {data.seo?.h3Count ?? 0}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <div className="font-medium mb-1">Links</div>
+                      <div>
+                        Total: {data.links?.total ?? 0} · Internal:{" "}
+                        {data.links?.internal ?? 0} · External:{" "}
+                        {data.links?.external ?? 0}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <div className="font-medium mb-1">Images</div>
+                      <div>
+                        Total: {data.images?.total ?? 0} · Missing ALT:{" "}
+                        {data.images?.missingAlt ?? 0}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border p-3 md:col-span-2">
+                      <div className="font-medium mb-1">Robots / Sitemap</div>
+                      <div>
+                        robots.txt:{" "}
+                        {data.robots?.robotsTxtOk ? "OK" : "Not found"} ·
+                        sitemap: {data.robots?.sitemapOk ? "OK" : "Not found"}
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-500 md:col-span-2">
+                      URL: {niceUrl} · HTTP: {data.httpStatus ?? "—"} · Lang:{" "}
+                      {data.meta?.lang ?? "—"}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="rounded-2xl border bg-white p-5 md:p-6">
@@ -529,8 +568,127 @@ export default function Landing({
               </div>
             </div>
 
-            {/* TABI */}
-            <TabsArea />
+            {/* TABI (paliek kā iepriekš; trīs blur tab joprojām lock uz Full report) */}
+            <div className="mt-6">
+              <div className="flex gap-2 pl-2">
+                {[
+                  "Overall",
+                  "Sections Present",
+                  "Quick Wins",
+                  "Prioritized Backlog",
+                  "Findings",
+                  "Content Audit",
+                  "Copy Suggestions",
+                ].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setActiveTab(t)}
+                    className={
+                      "px-4 py-2 rounded-t-xl text-sm border " +
+                      (activeTab === t
+                        ? "bg-white border-slate-200 font-medium"
+                        : "bg-slate-100/60 text-slate-700 border-transparent hover:bg-white")
+                    }
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              <div className="border border-t-0 rounded-b-xl bg-white p-4">
+                {/* OVERALL tab saturu jau redzi iepriekš; pārējie paliek tādi paši kā bija */}
+                {activeTab === "Sections Present" && (
+                  <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    {sectionsPresent.map((s, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-2 rounded-lg border px-3 py-2"
+                      >
+                        <span
+                          className={
+                            "h-2 w-2 rounded-full " +
+                            (s.ok ? "bg-emerald-500" : "bg-rose-500")
+                          }
+                        />
+                        <span className="text-sm">{s.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeTab === "Quick Wins" && (
+                  <ul className="space-y-2">
+                    {quickWins.map((q, i) => (
+                      <li
+                        key={i}
+                        className="flex items-start justify-between gap-3 rounded-xl border p-3"
+                      >
+                        <span className="text-slate-700">{q.text}</span>
+                        <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
+                          ≈ +{q.upliftPct}% leads
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {activeTab === "Prioritized Backlog" && (
+                  <div className="grid md:grid-cols-2 gap-3">
+                    {backlog.map((b, i) => (
+                      <div key={i} className="rounded-xl border p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium">{b.title}</div>
+                            <div className="mt-1 text-sm text-slate-600">
+                              Impact:{" "}
+                              <span
+                                className={
+                                  b.impact === "high"
+                                    ? "text-rose-600"
+                                    : b.impact === "med"
+                                    ? "text-amber-600"
+                                    : "text-emerald-600"
+                                }
+                              >
+                                {b.impact}
+                              </span>{" "}
+                              • Effort: {b.effort}
+                            </div>
+                          </div>
+                          <span className="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50">
+                            ≈ +{b.upliftPct}% leads
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {BLUR_TABS.has(activeTab) && (
+                  <div className="relative">
+                    <div className="pointer-events-none select-none blur-sm">
+                      <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
+                        {activeTab}
+                      </div>
+                    </div>
+                    <div className="absolute inset-0 grid place-items-center">
+                      <div className="rounded-xl bg-white/80 backdrop-blur border px-5 py-4 text-center shadow-sm">
+                        <div className="text-sm text-slate-700">
+                          Detailed view available in the Full Audit.
+                        </div>
+                        <button
+                          onClick={onOrderFull ?? orderFullInternal}
+                          className="mt-3 rounded-lg px-4 py-2 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+                        >
+                          Order Full Audit
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Scorecard CTA */}
             <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
@@ -570,7 +728,7 @@ export default function Landing({
         <Features onPrimaryClick={handleRun} />
       </div>
 
-      {/* FULL REPORT (zem Features) ar hero.png + badges ikonās */}
+      {/* FULL REPORT (zem Features) */}
       <section className="mx-auto max-w-[1200px] px-4 py-12">
         <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
           <div>
@@ -612,7 +770,6 @@ export default function Landing({
               className="w-full rounded-2xl border"
               loading="lazy"
             />
-            {/* BADGES kā atsevišķas ikonas rindā */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
                 { title: "100+ Checkpoints", icon: "🔎" },
