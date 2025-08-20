@@ -1,243 +1,246 @@
 // api/analyze.ts
-// Vercel Node Function (compatible with Node.js runtime on Vercel)
-type Ok<T> = { ok: true; data: T };
-type Err = { ok: false; error: string; code?: string };
+// JSON endpoint for the Free report.
+// Accepts: GET ?url=...  or  POST { url: "..."} (http/https prefix optional)
 
-type AnalyzeResult = {
-  url: string;
-  finalUrl: string;
-  fetchedAt: string;
-  httpStatus: number;
-  meta: {
+const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
+
+type AnalyzeData = {
+  finalUrl?: string;
+  url?: string;
+  fetchedAt?: string;
+  httpStatus?: number;
+  meta?: {
     title?: string;
     description?: string;
     lang?: string;
     viewport?: string;
     canonical?: string;
   };
-  seo: {
-    h1Count: number;
-    h2Count: number;
-    h3Count: number;
-    canonicalPresent: boolean;
-    metaDescriptionPresent: boolean;
+  seo?: {
+    h1Count?: number;
+    h2Count?: number;
+    h3Count?: number;
+    canonicalPresent?: boolean;
+    metaDescriptionPresent?: boolean;
   };
-  social: {
-    og: Record<string, string | undefined>;
-    twitter: Record<string, string | undefined>;
+  social?: {
+    og?: Record<string, string | undefined>;
+    twitter?: Record<string, string | undefined>;
   };
-  links: { total: number; internal: number; external: number };
-  images: { total: number; missingAlt: number };
-  robots: {
-    robotsTxtUrl: string;
-    robotsTxtOk: boolean | null;
-    sitemapUrlGuess: string;
-    sitemapOk: boolean | null;
+  links?: { total?: number; internal?: number; external?: number };
+  images?: { total?: number; missingAlt?: number };
+  robots?: {
+    robotsTxtUrl?: string;
+    robotsTxtOk?: boolean | null;
+    sitemapUrlGuess?: string;
+    sitemapOk?: boolean | null;
   };
-  headingsOutline: Array<{ tag: string; text: string }>;
+  headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
-function json(res: any, status: number, body: any) {
-  res
-    .status(status)
-    .setHeader("content-type", "application/json; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
-  res.send(JSON.stringify(body));
+function ok(res: any, obj: any) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(JSON.stringify(obj));
+}
+function bad(res: any, code: number, message: string) {
+  res.statusCode = code;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify({ ok: false, error: message }));
 }
 
-function normalizeUrl(input: string): URL {
-  let s = (input ?? "").trim();
-  if (!s) throw new Error('Missing "url" parameter');
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
-  const u = new URL(s);
-  if (!["http:", "https:"].includes(u.protocol))
-    throw new Error("Only http(s) URLs are allowed");
-  return u;
+function normalizeUrl(u: string) {
+  const s = (u || "").trim();
+  if (!s) return "";
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
 }
 
-function stripTags(s: string): string {
+async function fetchText(u: string) {
+  const r = await fetch(u, { headers: { "user-agent": UA } });
+  const text = await r.text();
+  return { status: r.status, url: r.url, text };
+}
+
+function stripTags(s: string) {
   return s
-    .replace(/<[^>]*>/g, "")
+    .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
-function extractBetween(html: string, start: string, end: string): string[] {
-  const res: string[] = [];
-  let i = 0;
-  for (;;) {
-    const s = html.indexOf(start, i);
-    if (s === -1) break;
-    const e = html.indexOf(end, s + start.length);
-    if (e === -1) break;
-    res.push(html.slice(s + start.length, e));
-    i = e + end.length;
+function extract(html: string, re: RegExp) {
+  const m = html.match(re);
+  return m ? m[1]?.trim() : undefined;
+}
+function parseHeadings(html: string) {
+  const out: Array<{ tag: string; text: string }> = [];
+  const re = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    out.push({ tag: m[1].toLowerCase(), text: stripTags(m[2]) });
   }
-  return res;
+  return out;
 }
-function attrOf(tag: string, name: string): string | undefined {
-  const m = new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i").exec(tag);
-  return m?.[2] ?? m?.[3] ?? undefined;
+function countTags(html: string, tag: string) {
+  const re = new RegExp(`<${tag}\\b`, "gi");
+  const matches = html.match(re);
+  return matches ? matches.length : 0;
 }
-async function headOrGetOk(url: string, init?: RequestInit) {
+function countImgsMissingAlt(html: string) {
+  const imgRe = /<img\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  let total = 0;
+  let missing = 0;
+  while ((m = imgRe.exec(html))) {
+    total++;
+    const tag = m[0];
+    const altMatch = tag.match(/\balt\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const ariaHidden = /\baria-hidden\s*=\s*("true"|'true'|true)/i.test(tag);
+    const rolePresent = /\brole\s*=\s*("presentation"|'presentation')/i.test(
+      tag
+    );
+    const altVal = altMatch
+      ? (altMatch[2] || altMatch[3] || altMatch[4] || "").trim()
+      : undefined;
+    const isMissing = !altVal && !ariaHidden && !rolePresent;
+    if (isMissing) missing++;
+  }
+  return { total, missing };
+}
+function countLinks(html: string, baseHost: string | null) {
+  const aRe = /<a\b[^>]*href\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))/gi;
+  let m: RegExpExecArray | null;
+  let total = 0;
+  let internal = 0;
+  let external = 0;
+
+  while ((m = aRe.exec(html))) {
+    total++;
+    const href = m[2] || m[3] || m[4] || "";
+    try {
+      if (
+        !href ||
+        href.startsWith("#") ||
+        href.startsWith("mailto:") ||
+        href.startsWith("tel:")
+      )
+        continue;
+      if (href.startsWith("/")) {
+        internal++;
+      } else if (/^https?:\/\//i.test(href)) {
+        const u = new URL(href);
+        if (baseHost && u.host === baseHost) internal++;
+        else external++;
+      } else {
+        internal++; // relative
+      }
+    } catch {
+      // ignore bad URLs
+    }
+  }
+  return { total, internal, external };
+}
+
+async function fetchHead(url: string) {
   try {
-    // Node 18+ has global fetch on Vercel
-    let r = await fetch(url, { method: "HEAD", redirect: "follow", ...init });
-    if (r.ok) return true;
-    r = await fetch(url, { method: "GET", redirect: "follow", ...init });
-    return r.ok;
+    const r = await fetch(url, {
+      method: "GET",
+      headers: { "user-agent": UA },
+    });
+    return r.status >= 200 && r.status < 400;
   } catch {
     return false;
   }
 }
 
-// Default export for Vercel Node Function
 export default async function handler(req: any, res: any) {
   try {
     const method = (req.method || "GET").toUpperCase();
+    const body = method === "POST" ? await readBody(req) : null;
+    const qUrl = (req.query?.url as string) || (body?.url as string) || "";
+    const url = normalizeUrl(qUrl);
+    if (!url) return bad(res, 400, "Missing URL");
 
-    let inputUrl = "";
-    if (method === "GET") {
-      inputUrl = (req.query?.url ?? "").toString();
-    } else if (method === "POST") {
-      inputUrl = (req.body?.url ?? "").toString();
-    }
+    // fetch html
+    const { status, url: finalUrl, text: html } = await fetchText(url);
 
-    let target: URL;
-    try {
-      target = normalizeUrl(inputUrl);
-    } catch (e: any) {
-      const err: Err = {
-        ok: false,
-        error: e?.message || "Invalid URL",
-        code: "INVALID_URL",
-      };
-      return json(res, 400, err);
-    }
-
-    // Fetch page (timeout approx via AbortController)
-    const controller = new AbortController();
-    const tm = setTimeout(() => controller.abort(), 15000);
-    const ua =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-    let resp: Response;
-    try {
-      resp = await fetch(target.toString(), {
-        redirect: "follow",
-        headers: {
-          "user-agent": ua,
-          accept: "text/html,application/xhtml+xml",
-        },
-        signal: controller.signal,
-      });
-    } catch (e: any) {
-      clearTimeout(tm);
-      const err: Err = {
-        ok: false,
-        error: `Failed to fetch target: ${e?.message ?? "fetch failed"}`,
-        code: "FETCH_ERROR",
-      };
-      return json(res, 502, err);
-    } finally {
-      clearTimeout(tm);
-    }
-
-    const status = (resp as any).status;
-    const html = await resp.text();
-    const head = html.slice(0, 200_000);
-
-    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(head);
-    const title = titleMatch ? stripTags(titleMatch[1]) : undefined;
-
-    const metaContent = (n: string) => {
-      const re = new RegExp(
-        `<meta[^>]+(?:name|property)\\s*=\\s*["']${n}["'][^>]*?(?:content\\s*=\\s*("([^"]*)"|'([^']*)'))?[^>]*>`,
-        "i"
+    const lang = extract(html, /<html[^>]+lang\s*=\s*["']?([a-zA-Z-]+)[^>]*>/i);
+    const title = extract(html, /<title>([\s\S]*?)<\/title>/i);
+    const description =
+      extract(
+        html,
+        /<meta\s+name=["']description["']\s+content=["']([\s\S]*?)["'][^>]*>/i
+      ) ||
+      extract(
+        html,
+        /<meta\s+property=["']og:description["']\s+content=["']([\s\S]*?)["'][^>]*>/i
       );
-      const m = re.exec(head);
-      return (m?.[2] ?? m?.[3])?.trim();
-    };
-    const description = metaContent("description");
-    const viewport = metaContent("viewport");
-    const canonical = (() => {
-      const m = /<link[^>]+rel\s*=\s*["']canonical["'][^>]*>/i.exec(head);
-      return m ? attrOf(m[0], "href") : undefined;
+    const viewport = extract(
+      html,
+      /<meta\s+name=["']viewport["']\s+content=["']([\s\S]*?)["'][^>]*>/i
+    );
+    const canonical = extract(
+      html,
+      /<link\s+rel=["']canonical["']\s+href=["']([^"']+)["'][^>]*>/i
+    );
+
+    const og: Record<string, string | undefined> = {};
+    const tw: Record<string, string | undefined> = {};
+    const metaPairs = html.match(/<meta[^>]+>/gi) || [];
+    for (const tag of metaPairs) {
+      const prop =
+        (tag.match(/\bproperty\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
+        (tag.match(/\bproperty\s*=\s*('([^']+)')/i) || [])[2];
+      const name =
+        (tag.match(/\bname\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
+        (tag.match(/\bname\s*=\s*('([^']+)')/i) || [])[2];
+      const content =
+        (tag.match(/\bcontent\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
+        (tag.match(/\bcontent\s*=\s*('([^']+)')/i) || [])[2];
+      const key = (prop || name || "").toLowerCase();
+      if (key.startsWith("og:")) og[key] = content;
+      if (key.startsWith("twitter:")) tw[key] = content;
+    }
+
+    const headingsOutline = parseHeadings(html);
+    const h1Count = countTags(html, "h1");
+    const h2Count = countTags(html, "h2");
+    const h3Count = countTags(html, "h3");
+    const { total: imgTotal, missing: missingAlt } = countImgsMissingAlt(html);
+
+    const baseHost = (() => {
+      try {
+        const u = new URL(finalUrl || url);
+        return u.host;
+      } catch {
+        return null;
+      }
+    })();
+    const { total: linkTotal, internal, external } = countLinks(html, baseHost);
+
+    const origin = (() => {
+      try {
+        const u = new URL(finalUrl || url);
+        return `${u.protocol}//${u.host}`;
+      } catch {
+        return null;
+      }
     })();
 
-    const htmlTag = /<html[^>]*>/i.exec(html)?.[0] ?? "";
-    const lang = attrOf(htmlTag, "lang");
-
-    const og = [
-      "og:title",
-      "og:description",
-      "og:image",
-      "og:url",
-      "og:type",
-    ].reduce(
-      (acc, k) => ((acc[k] = metaContent(k)), acc),
-      {} as Record<string, string | undefined>
-    );
-    const twitter = [
-      "twitter:card",
-      "twitter:title",
-      "twitter:description",
-      "twitter:image",
-    ].reduce(
-      (acc, k) => ((acc[k] = metaContent(k)), acc),
-      {} as Record<string, string | undefined>
-    );
-
-    const headings: Array<{ tag: string; text: string }> = [];
-    for (let level = 1; level <= 6; level++) {
-      const r = new RegExp(`<h${level}[^>]*>([\\s\\S]*?)<\\/h${level}>`, "gi");
-      let m: RegExpExecArray | null;
-      while ((m = r.exec(html))) {
-        headings.push({ tag: `h${level}`, text: stripTags(m[1]) });
-      }
-    }
-    const h1Count = headings.filter((h) => h.tag === "h1").length;
-    const h2Count = headings.filter((h) => h.tag === "h2").length;
-    const h3Count = headings.filter((h) => h.tag === "h3").length;
-
-    // Links
-    const origin = new URL((resp as any).url || target.toString()).origin;
-    const aChunks = extractBetween(html, "<a", ">");
-    let linksTotal = 0,
-      linksInternal = 0,
-      linksExternal = 0;
-    for (const raw of aChunks) {
-      const tag = "<a" + raw + ">";
-      const href = attrOf(tag, "href");
-      if (!href) continue;
-      linksTotal++;
-      try {
-        const u = new URL(href, origin);
-        if (u.origin === origin) linksInternal++;
-        else linksExternal++;
-      } catch {}
+    let robotsTxtOk: boolean | null = null;
+    let sitemapOk: boolean | null = null;
+    let robotsTxtUrl: string | undefined;
+    let sitemapUrlGuess: string | undefined;
+    if (origin) {
+      robotsTxtUrl = `${origin}/robots.txt`;
+      sitemapUrlGuess = `${origin}/sitemap.xml`;
+      robotsTxtOk = await fetchHead(robotsTxtUrl);
+      sitemapOk = await fetchHead(sitemapUrlGuess);
     }
 
-    // Images
-    const imgChunks = extractBetween(html, "<img", ">");
-    let imgTotal = 0,
-      imgMissingAlt = 0;
-    for (const raw of imgChunks) {
-      const tag = "<img" + raw + ">";
-      imgTotal++;
-      const alt = attrOf(tag, "alt");
-      if (!alt || !alt.trim()) imgMissingAlt++;
-    }
-
-    // robots/sitemap (best effort)
-    const site = new URL((resp as any).url || target.toString());
-    const robotsTxtUrl = `${site.origin}/robots.txt`;
-    const sitemapGuess = `${site.origin}/sitemap.xml`;
-    const robotsTxtOk = await headOrGetOk(robotsTxtUrl);
-    const sitemapOk = await headOrGetOk(sitemapGuess);
-
-    const data: AnalyzeResult = {
-      url: target.toString(),
-      finalUrl: (resp as any).url || target.toString(),
+    const data: AnalyzeData = {
+      finalUrl,
+      url,
       fetchedAt: new Date().toISOString(),
       httpStatus: status,
       meta: { title, description, lang, viewport, canonical },
@@ -246,32 +249,32 @@ export default async function handler(req: any, res: any) {
         h2Count,
         h3Count,
         canonicalPresent: !!canonical,
-        metaDescriptionPresent: !!description && description.length > 0,
+        metaDescriptionPresent: !!description,
       },
-      social: { og, twitter },
-      links: {
-        total: linksTotal,
-        internal: linksInternal,
-        external: linksExternal,
-      },
-      images: { total: imgTotal, missingAlt: imgMissingAlt },
-      robots: {
-        robotsTxtUrl,
-        robotsTxtOk,
-        sitemapUrlGuess: sitemapGuess,
-        sitemapOk,
-      },
-      headingsOutline: headings,
+      social: { og, twitter: tw },
+      links: { total: linkTotal, internal, external },
+      images: { total: imgTotal, missingAlt },
+      robots: { robotsTxtUrl, robotsTxtOk, sitemapUrlGuess, sitemapOk },
+      headingsOutline,
     };
 
-    const ok: Ok<AnalyzeResult> = { ok: true, data };
-    return json(res, 200, ok);
+    return ok(res, { ok: true, data });
   } catch (e: any) {
-    const err: Err = {
-      ok: false,
-      error: e?.message ?? "Unknown error",
-      code: "UNEXPECTED",
-    };
-    return json(res, 500, err);
+    console.error(e);
+    return bad(res, 500, e?.message || "Analyze failed");
   }
+}
+
+function readBody(req: any): Promise<any> {
+  return new Promise((resolve) => {
+    let buf = "";
+    req.on("data", (c: Buffer) => (buf += c.toString("utf8")));
+    req.on("end", () => {
+      try {
+        resolve(buf ? JSON.parse(buf) : {});
+      } catch {
+        resolve({});
+      }
+    });
+  });
 }
