@@ -1,8 +1,6 @@
 import React, { useRef, useState, useEffect } from "react";
-import GradeBadge from "./components/GradeBadge";
-import Features from "./components/Features";
-import Counters from "./components/Counters";
-import ContactForm from "./components/ContactForm";
+import { runAnalyze } from '../lib/analyzeClient';
+import { StatusBar } from './StatusBar';
 import { runAnalyze } from "./lib/analyzeClient"; // ✅ reālā analīze
 
 type LandingProps = {

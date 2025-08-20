@@ -39,7 +39,10 @@ export function StatusBar({ active }: { active: boolean }) {
   // Etiķetes pēc robežām
   useEffect(() => {
     const steps = DEFAULT_STEPS;
-    const current = steps.findLast((s) => pct >= s.at);
+    const current = steps
+      .slice()
+      .reverse()
+      .find((s) => pct >= s.at);
     if (current) setLabel(current.label);
   }, [pct]);
 
