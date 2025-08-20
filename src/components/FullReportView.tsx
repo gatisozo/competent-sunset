@@ -86,13 +86,19 @@ function scoreBarColor(n: number) {
 }
 
 /* ---------------- screenshots ---------------- */
-function buildScreenshotUrl(target: string) {
+// primārais no ENV (ja definēts)
+function envScreenshotUrl(target: string) {
   const url = /^https?:\/\//i.test(target) ? target : `https://${target}`;
   const tmpl =
     (import.meta as any).env?.VITE_SCREENSHOT_URL_TMPL ||
     (typeof process !== "undefined" &&
       (process as any).env?.SCREENSHOT_URL_TMPL);
   if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
+  return undefined;
+}
+// rezervē vienmēr pieejams mShots
+function mshotsUrl(target: string) {
+  const url = /^https?:\/\//i.test(target) ? target : `https://${target}`;
   return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
 }
 function withCacheBuster(u: string) {
@@ -111,7 +117,7 @@ function useSmartImage(
   const [src, setSrc] = useState<string | undefined>(
     primary || backup || undefined
   );
-  const [loading, setLoading] = useState<boolean>(!!src);
+  const [loading, setLoading] = useState<boolean>(!!(primary || backup));
   const [retries, setRetries] = useState(0);
   const MAX_RETRIES = 4;
 
@@ -198,7 +204,6 @@ function deriveContentAudit(r: any): ContentAuditItem[] {
     {
       section: "Hero",
       present: s.hero,
-      // FIX: nekad neatgriezt boolean; vienmēr "good" | "poor"
       quality: s.hero
         ? (r?.seo?.h1Count ?? 0) === 1
           ? "good"
@@ -542,14 +547,22 @@ export default function FullReportView() {
     return r as ApiFullReport;
   }, [raw]);
 
-  const heroPrimary = useMemo(
-    () =>
+  // primārais no servera vai ENV; backup vienmēr mShots
+  const heroPrimary = useMemo(() => {
+    const u = (report as any)?.page?.url || url;
+    return (
       (report as any)?.screenshots?.hero ||
       (report as any)?.assets?.screenshot_url ||
-      (url ? buildScreenshotUrl(url) : undefined),
-    [report, url]
-  );
-  const heroImg = useSmartImage(heroPrimary || undefined, undefined);
+      (u ? envScreenshotUrl(u) : undefined)
+    );
+  }, [report, url]);
+
+  const heroBackup = useMemo(() => {
+    const u = (report as any)?.page?.url || url;
+    return u ? mshotsUrl(u) : undefined;
+  }, [report, url]);
+
+  const heroImg = useSmartImage(heroPrimary || undefined, heroBackup);
 
   const topHeroSuggestions = useMemo(() => {
     const all = (report as any)?.findings || [];
@@ -618,7 +631,6 @@ export default function FullReportView() {
 
   useEffect(() => {
     if (autostart && qUrl) startStream(qUrl, "full");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autostart, qUrl]);
 
   return (

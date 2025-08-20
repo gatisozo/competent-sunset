@@ -1,7 +1,7 @@
 // src/lib/analyzeClient.ts
 // Klienta helpers Free reportam (Landing/FreeReport).
-// Atgriež { ok: true, data } / { ok: false, error } un nekad nemet SyntaxError,
-// ja serveris atbild ar HTML vai citu ne-JSON satura tipu.
+// Atgriež { ok: true, data } / { ok: false, error } un nekrīt,
+// ja serveris atbild ar HTML (Vercel 500).
 
 export type AnalyzeResponse =
   | { ok: true; data: any }
@@ -37,35 +37,31 @@ export async function runAnalyze(
       },
     });
 
-    // mēģinām saprast, vai atbilde vispār ir JSON
     const ctype = r.headers.get("content-type") || "";
     const isJson = ctype.includes("application/json");
 
     if (!r.ok) {
-      // mēģinām izvilkt kļūdas ziņu no JSON, ja tāds ir
       if (isJson) {
         try {
           const j = await r.json();
-          const msg =
-            j?.error || j?.message || `Analyze failed (HTTP ${r.status})`;
-          return { ok: false, error: String(msg) };
+          return {
+            ok: false,
+            error: String(j?.error || `Analyze failed (HTTP ${r.status})`),
+          };
         } catch {
-          /* fall through */
+          /* ignore */
         }
       }
-      // ne-JSON kļūda (piem., Vercel HTML “A server error has occurred”)
       return { ok: false, error: `Analyze failed (HTTP ${r.status})` };
     }
 
-    // 2xx – ja JSON, atgriežam to; citādi kļūda
-    if (isJson) {
-      const j = await r.json();
-      // sagaidām /api/analyze atbildi formā { ok, data?, error? }
-      if (j && j.ok) return { ok: true, data: j.data };
-      return { ok: false, error: j?.error || "Analyze failed" };
+    if (!isJson) {
+      return { ok: false, error: "Analyze failed: unexpected response type" };
     }
 
-    return { ok: false, error: "Analyze failed: unexpected response type" };
+    const j = await r.json();
+    if (j && j.ok) return { ok: true, data: j.data };
+    return { ok: false, error: j?.error || "Analyze failed" };
   } catch (e: any) {
     if (e?.name === "AbortError") {
       return { ok: false, error: "Request aborted", code: "ABORTED" };
