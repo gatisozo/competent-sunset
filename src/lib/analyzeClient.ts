@@ -1,7 +1,7 @@
 // src/lib/analyzeClient.ts
 // Klienta helpers Free reportam (Landing/FreeReport).
 // Atgriež { ok: true, data } / { ok: false, error } un nekrīt,
-// ja serveris atbild ar HTML (Vercel 500).
+// ja serveris atbild ar HTML (Vercel 500 u.c.)
 
 export type AnalyzeResponse =
   | { ok: true; data: any }

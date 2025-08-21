@@ -1,5 +1,6 @@
 // api/analyze.ts
-// JSON endpoint Free reportam. Pieņem GET ?url=... vai POST { url } (ar vai bez https://).
+// JSON endpoint Free reportam. Pieņem GET ?url=... vai POST { url } (ar/bez https://).
+
 const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 
 type AnalyzeData = {
@@ -72,9 +73,8 @@ function parseHeadings(html: string) {
   const out: Array<{ tag: string; text: string }> = [];
   const re = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1>/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
+  while ((m = re.exec(html)))
     out.push({ tag: m[1].toLowerCase(), text: stripTags(m[2]) });
-  }
   return out;
 }
 function countTags(html: string, tag: string) {
@@ -85,8 +85,8 @@ function countTags(html: string, tag: string) {
 function countImgsMissingAlt(html: string) {
   const imgRe = /<img\b[^>]*>/gi;
   let m: RegExpExecArray | null;
-  let total = 0;
-  let missing = 0;
+  let total = 0,
+    missing = 0;
   while ((m = imgRe.exec(html))) {
     total++;
     const tag = m[0];
@@ -106,10 +106,9 @@ function countImgsMissingAlt(html: string) {
 function countLinks(html: string, baseHost: string | null) {
   const aRe = /<a\b[^>]*href\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))/gi;
   let m: RegExpExecArray | null;
-  let total = 0;
-  let internal = 0;
-  let external = 0;
-
+  let total = 0,
+    internal = 0,
+    external = 0;
   while ((m = aRe.exec(html))) {
     total++;
     const href = m[2] || m[3] || m[4] || "";
@@ -121,17 +120,14 @@ function countLinks(html: string, baseHost: string | null) {
         href.startsWith("tel:")
       )
         continue;
-      if (href.startsWith("/")) {
-        internal++;
-      } else if (/^https?:\/\//i.test(href)) {
+      if (href.startsWith("/")) internal++;
+      else if (/^https?:\/\//i.test(href)) {
         const u = new URL(href);
         if (baseHost && u.host === baseHost) internal++;
         else external++;
-      } else {
-        internal++; // relative
-      }
+      } else internal++; // relative
     } catch {
-      // ignore bad URLs
+      /* ignore */
     }
   }
   return { total, internal, external };
@@ -213,6 +209,7 @@ export default async function handler(req: any, res: any) {
     const h1Count = countTags(html, "h1");
     const h2Count = countTags(html, "h2");
     const h3Count = countTags(html, "h3");
+
     const { total: imgTotal, missing: missingAlt } = countImgsMissingAlt(html);
 
     const baseHost = (() => {

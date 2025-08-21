@@ -1,5 +1,5 @@
 // api/analyze-stream.ts
-// SSE endpoint used by the Full report. Emits: "progress" events and one "result" event.
+// SSE endpoint Full reportam. Sūta: event:progress {value} un event:result {report}
 
 const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 
@@ -16,13 +16,12 @@ type ContentAuditItem = {
 };
 type BacklogItem = {
   title: string;
-  impact?: number; // 1..3
+  impact?: number;
   effort_days?: number;
   eta_days?: number;
   notes?: string;
-  lift_percent?: number; // for UI badge
+  lift_percent?: number;
 };
-
 type FullReport = {
   page?: { url?: string; title?: string };
   assets?: { screenshot_url?: string | null };
@@ -42,7 +41,6 @@ type FullReport = {
   prioritized_backlog?: BacklogItem[];
   findings?: Suggestion[];
   content_audit?: ContentAuditItem[];
-  // pass-through for client enrichment if needed:
   meta?: any;
   seo?: any;
   images?: any;
@@ -53,11 +51,10 @@ type FullReport = {
   score?: number;
 };
 
-const write = (res: any, ev: string, data: any) => {
+const write = (res: any, ev: string, data: unknown) => {
   res.write(`event: ${ev}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 };
-
 const okHeaders = (res: any) => {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
@@ -71,51 +68,39 @@ function normalizeUrl(u: string) {
   if (!s) return "";
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
 }
-
-function screenshotUrl(u: string) {
+function screenshotPrimary(u: string) {
   const url = normalizeUrl(u);
   const tmpl =
     (globalThis as any).process?.env?.SCREENSHOT_URL_TMPL ||
     (globalThis as any).VITE_SCREENSHOT_URL_TMPL;
   if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
+  return null;
+}
+function screenshotBackup(u: string) {
+  const url = normalizeUrl(u);
   return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
 }
-
 async function fetchText(u: string) {
   const r = await fetch(u, { headers: { "user-agent": UA } });
   const text = await r.text();
   return { status: r.status, url: r.url, text };
 }
-
-function extract(html: string, re: RegExp) {
-  const m = html.match(re);
-  return m ? m[1]?.trim() : undefined;
-}
-function stripTags(s: string) {
-  return s
+const extract = (html: string, re: RegExp) =>
+  (html.match(re)?.[1] || "").trim() || undefined;
+const stripTags = (s: string) =>
+  s
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-function parseHeadings(html: string) {
-  const out: Array<{ tag: string; text: string }> = [];
-  const re = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    out.push({ tag: m[1].toLowerCase(), text: stripTags(m[2]) });
-  }
-  return out;
-}
-function countTags(html: string, tag: string) {
+function count(html: string, tag: string) {
   const re = new RegExp(`<${tag}\\b`, "gi");
-  const matches = html.match(re);
-  return matches ? matches.length : 0;
+  return (html.match(re) || []).length;
 }
 function countImgsMissingAlt(html: string) {
   const imgRe = /<img\b[^>]*>/gi;
   let m: RegExpExecArray | null;
-  let total = 0;
-  let missing = 0;
+  let total = 0,
+    missing = 0;
   while ((m = imgRe.exec(html))) {
     total++;
     const tag = m[0];
@@ -135,10 +120,9 @@ function countImgsMissingAlt(html: string) {
 function countLinks(html: string, baseHost: string | null) {
   const aRe = /<a\b[^>]*href\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))/gi;
   let m: RegExpExecArray | null;
-  let total = 0;
-  let internal = 0;
-  let external = 0;
-
+  let total = 0,
+    internal = 0,
+    external = 0;
   while ((m = aRe.exec(html))) {
     total++;
     const href = m[2] || m[3] || m[4] || "";
@@ -150,324 +134,238 @@ function countLinks(html: string, baseHost: string | null) {
         href.startsWith("tel:")
       )
         continue;
-      if (href.startsWith("/")) {
-        internal++;
-      } else if (/^https?:\/\//i.test(href)) {
+      if (href.startsWith("/")) internal++;
+      else if (/^https?:\/\//i.test(href)) {
         const u = new URL(href);
         if (baseHost && u.host === baseHost) internal++;
         else external++;
-      } else {
-        internal++; // relative
-      }
+      } else internal++;
     } catch {
-      // ignore bad URLs
+      /* ignore */
     }
   }
   return { total, internal, external };
 }
 
-async function fetchHead(url: string) {
-  try {
-    const r = await fetch(url, {
-      method: "GET",
-      headers: { "user-agent": UA },
-    });
-    return r.status >= 200 && r.status < 400;
-  } catch {
-    return false;
-  }
-}
-
-/* ---------- derivations used server-side (for richer FullReport) ---------- */
-
-function deriveSectionsDetected(input: any) {
-  const txt = (input.text_snippets || "").toLowerCase();
+function sectionsDetected(r: any): FullReport["sections_detected"] {
+  const text = (r.text_snippets || "").toLowerCase();
+  const h1c = r?.seo?.h1Count ?? 0;
   return {
-    hero: (input.seo?.h1Count ?? 0) > 0,
-    value_prop: !!(
-      input.meta?.description && input.meta.description.length > 40
-    ),
-    social_proof: /testimonial|review|trust|clients|logos?/i.test(txt),
-    pricing: /price|pricing|plans?/i.test(txt),
-    features: /feature|benefit|capabilit(y|ies)/i.test(txt),
-    faq: /faq|frequently asked|questions/i.test(txt),
-    contact: /contact|get in touch|support|help/i.test(txt),
-    footer: (input.links?.total ?? 0) >= 8 || /privacy|terms/i.test(txt),
+    hero: h1c > 0,
+    value_prop: !!(r?.meta?.description && r.meta.description.length > 40),
+    social_proof: /testimonial|review|trust|clients? logos?/i.test(text),
+    pricing: /price|pricing|plans?/i.test(text),
+    features: /feature|benefit|capabilit(y|ies)/i.test(text),
+    faq: /faq|frequently asked|questions/i.test(text),
+    contact: /contact|get in touch|support|help/i.test(text),
+    footer: /privacy|terms/i.test(text) || (r?.links?.total ?? 0) >= 8,
   };
 }
 
-function serverQuickWins(input: any): string[] {
-  const out: string[] = [];
-  const h1c = input.seo?.h1Count ?? 0;
-  const md = input.meta?.description as string | undefined;
-  const hasCanon = !!(input.seo?.canonicalPresent || input.meta?.canonical);
-  const { total: imgTotal, missingAlt } = input.images || {};
-  const internal = input.links?.internal ?? 0;
-  const ogCount = Object.values(input.social?.og ?? {}).filter(Boolean).length;
-  const twCount = Object.values(input.social?.twitter ?? {}).filter(
-    Boolean
-  ).length;
+function quickWins(r: any): string[] {
+  const wins: string[] = [];
+  const h1c = r?.seo?.h1Count ?? 0;
+  const md = r?.meta?.description as string | undefined;
+  const hasCanon = !!(r?.seo?.canonicalPresent || r?.meta?.canonical);
+  const altTotal = r?.images?.total ?? 0;
+  const altMiss = r?.images?.missingAlt ?? 0;
+  const altLift = altTotal
+    ? Math.min(3, Math.round((altMiss / altTotal) * 3))
+    : 0;
 
   if (h1c !== 1)
-    out.push("Add a single clear H1 + primary CTA above the fold. (≈ +12%)");
-  if (!md || md.length < 140 || md.length > 180)
-    out.push("Fix meta description to ~150 chars with benefits. (≈ +4%)");
-  if (!hasCanon) out.push("Add canonical URL to prevent duplicates. (≈ +1%)");
-
-  if (imgTotal > 0 && typeof missingAlt === "number" && missingAlt > 0) {
-    const altLift = Math.min(
-      3,
-      Math.round((missingAlt / Math.max(1, imgTotal)) * 3)
+    wins.push(
+      "Use a single clear H1 + primary CTA above the fold. (≈ +12% leads)"
     );
-    if (altLift > 0) out.push(`Add ALT text to images (≈ +${altLift}% leads).`);
-  }
-  if (internal < 5) out.push("Add 5–10 internal links to key pages. (≈ +3%)");
-  if (ogCount + twCount < 3)
-    out.push("Add OpenGraph/Twitter meta for better sharing. (≈ +1–2%)");
-  if (input.robots && (!input.robots.robotsTxtOk || !input.robots.sitemapOk)) {
-    if (!input.robots.robotsTxtOk)
-      out.push("Publish /robots.txt and include sitemap link. (≈ +1%)");
-    if (!input.robots.sitemapOk)
-      out.push("Publish /sitemap.xml and reference it in robots.txt. (≈ +1%)");
-  }
+  if (!md || md.length < 140 || md.length > 180)
+    wins.push(
+      "Fix meta description to ~150 chars with benefits. (≈ +4% leads)"
+    );
+  if (altLift > 0) wins.push(`Add ALT text to images. (≈ +${altLift}% leads)`);
+  if (!hasCanon)
+    wins.push("Add canonical URL to prevent duplicates. (≈ +1% leads)");
+  if ((r?.links?.internal ?? 0) < 5)
+    wins.push("Add 5–10 internal links to key pages. (≈ +3% leads)");
 
-  return out.slice(0, 10);
+  const ogCount = Object.values(r?.social?.og ?? {}).filter(Boolean).length;
+  const twCount = Object.values(r?.social?.twitter ?? {}).filter(
+    Boolean
+  ).length;
+  if (ogCount + twCount < 3)
+    wins.push("Add OpenGraph/Twitter meta for rich shares. (≈ +1–2% leads)");
+
+  if (r?.robots && (!r.robots.robotsTxtOk || !r.robots.sitemapOk)) {
+    if (!r.robots.robotsTxtOk)
+      wins.push("Publish /robots.txt and include sitemap link. (≈ +1% leads)");
+    if (!r.robots.sitemapOk)
+      wins.push(
+        "Publish /sitemap.xml and reference it in robots.txt. (≈ +1% leads)"
+      );
+  }
+  return wins.slice(0, 10);
 }
 
-function serverBacklog(input: any): BacklogItem[] {
+function backlog(r: any): BacklogItem[] {
   const items: BacklogItem[] = [];
-  const h1c = input.seo?.h1Count ?? 0;
-  const md = input.meta?.description as string | undefined;
-  const { total: imgTotal, missingAlt } = input.images || {};
-  const internal = input.links?.internal ?? 0;
-  const hasCanon = !!(input.seo?.canonicalPresent || input.meta?.canonical);
+  const h1c = r?.seo?.h1Count ?? 0;
+  const md = r?.meta?.description as string | undefined;
+  const altTotal = r?.images?.total ?? 0;
+  const altMiss = r?.images?.missingAlt ?? 0;
+  const altLift = altTotal
+    ? Math.min(3, Math.round((altMiss / altTotal) * 3))
+    : 0;
 
-  if (h1c !== 1) {
+  if (h1c !== 1)
     items.push({
       title: "Revamp the Hero Section",
       impact: 3,
       effort_days: 2,
       eta_days: 10,
+      notes:
+        "Strong value proposition, single H1, prominent CTA and benefit bullets.",
       lift_percent: 20,
-      notes: "Strong value prop, single H1, prominent CTA and benefit bullets.",
     });
-  }
-  if (!md || md.length < 140 || md.length > 180) {
+  items.push({
+    title: "Implement a Testimonial Slider",
+    impact: 2,
+    effort_days: 3,
+    eta_days: 7,
+    notes:
+      "Collect 6–10 short quotes with names/roles; add logo row if available.",
+    lift_percent: 10,
+  });
+  items.push({
+    title: "Optimize the FAQ Section",
+    impact: 2,
+    effort_days: 2,
+    eta_days: 5,
+    notes: "Collapsible groups; top 8–10 questions surfaced.",
+    lift_percent: 10,
+  });
+
+  if (!md || md.length < 140 || md.length > 180)
     items.push({
       title: "Re-write Meta Description",
       impact: 1,
       effort_days: 1,
       eta_days: 2,
-      lift_percent: 4,
       notes: "Aim for 145–160 chars with benefit + brand.",
+      lift_percent: 4,
     });
-  }
-  if (!hasCanon) {
-    items.push({
-      title: "Add Canonical URL",
-      impact: 1,
-      effort_days: 0.5,
-      eta_days: 1,
-      lift_percent: 1,
-      notes: "Point to the canonical route without params.",
-    });
-  }
-  if (imgTotal > 0 && typeof missingAlt === "number" && missingAlt > 0) {
-    const altLift = Math.min(
-      3,
-      Math.round((missingAlt / Math.max(1, imgTotal)) * 3)
-    );
+  if (altLift > 0)
     items.push({
       title: "Add ALT Text to Images",
       impact: 1,
       effort_days: 1,
       eta_days: 2,
+      notes:
+        "Short descriptive ALT for non-decorative; empty alt for decorative.",
       lift_percent: altLift,
-      notes: "Short, descriptive ALT; empty alt for decorative images.",
     });
-  }
-  if (internal < 5) {
+
+  const hasCanon = !!(r?.seo?.canonicalPresent || r?.meta?.canonical);
+  if (!hasCanon)
+    items.push({
+      title: "Add Canonical URL",
+      impact: 1,
+      effort_days: 0.5,
+      eta_days: 1,
+      notes: "Point to the canonical route without params.",
+      lift_percent: 1,
+    });
+
+  if ((r?.links?.internal ?? 0) < 5)
     items.push({
       title: "Strengthen Internal Linking",
       impact: 2,
       effort_days: 1,
       eta_days: 2,
-      lift_percent: 3,
       notes:
         "Add 5–10 links to product/pricing/contact/FAQ from relevant copy.",
+      lift_percent: 3,
     });
-  }
-  if (input.robots && (!input.robots.robotsTxtOk || !input.robots.sitemapOk)) {
-    if (!input.robots.robotsTxtOk)
+
+  const ogCount = Object.values(r?.social?.og ?? {}).filter(Boolean).length;
+  const twCount = Object.values(r?.social?.twitter ?? {}).filter(
+    Boolean
+  ).length;
+  if (ogCount + twCount < 3)
+    items.push({
+      title: "Add Social Meta (OG/Twitter)",
+      impact: 1,
+      effort_days: 0.5,
+      eta_days: 1,
+      notes: "og:title/description/image/url + twitter:card for rich shares.",
+      lift_percent: 1,
+    });
+
+  if (r?.robots && (!r.robots.robotsTxtOk || !r.robots.sitemapOk)) {
+    if (!r.robots.robotsTxtOk)
       items.push({
         title: "Publish robots.txt",
         impact: 1,
         effort_days: 0.5,
         eta_days: 1,
-        lift_percent: 1,
         notes: "Allow crawling; include sitemap link.",
+        lift_percent: 1,
       });
-    if (!input.robots.sitemapOk)
+    if (!r.robots.sitemapOk)
       items.push({
         title: "Publish sitemap.xml",
         impact: 1,
         effort_days: 0.5,
         eta_days: 1,
-        lift_percent: 1,
         notes: "Autogenerate and keep up-to-date; link in robots.txt.",
+        lift_percent: 1,
       });
   }
-
   return items.slice(0, 12);
 }
 
-function serverFindings(input: any): Suggestion[] {
-  const f: Suggestion[] = [];
-  const h1c = input.seo?.h1Count ?? 0;
-  const md = input.meta?.description as string | undefined;
-  const s = deriveSectionsDetected(input);
-
-  if (h1c !== 1) {
-    f.push({
+function findings(r: any): Suggestion[] {
+  const out: Suggestion[] = [];
+  const h1c = r?.seo?.h1Count ?? 0;
+  if (h1c !== 1)
+    out.push({
       title: "Hero Section Needs Improvement",
       impact: "high",
       recommendation:
         "Use one strong H1, clear value proposition, and a primary CTA above the fold.",
     });
-  }
-  if (!s.social_proof) {
-    f.push({
+  if (!r?.meta?.description)
+    out.push({
+      title: "Missing Meta Description",
+      impact: "low",
+      recommendation:
+        "Add a ~150-char meta description including your key benefit and brand.",
+    });
+  const text = (r.text_snippets || "").toLowerCase();
+  if (!/testimonial|review|trust|clients? logos?/i.test(text))
+    out.push({
       title: "Insufficient Social Proof",
       impact: "medium",
       recommendation:
         "Add testimonials, case-studies, or client logos to build trust.",
     });
-  }
-  if (!md || md.length < 140 || md.length > 180) {
-    f.push({
-      title: "Meta Description Not Optimal",
-      impact: "low",
-      recommendation:
-        "Re-write to ~150 characters with the main benefit and brand.",
-    });
-  }
-
-  return f.slice(0, 8);
+  return out.slice(0, 8);
 }
-
-function serverContentAudit(input: any): ContentAuditItem[] {
-  const s = deriveSectionsDetected(input);
-  const md = input.meta?.description as string | undefined;
-  const list: ContentAuditItem[] = [
-    {
-      section: "Hero",
-      present: s.hero,
-      quality: s.hero && (input.seo?.h1Count ?? 0) === 1 ? "good" : "poor",
-      suggestion: s.hero ? undefined : "Add one clear H1 and a primary CTA.",
-    },
-    {
-      section: "Value Prop",
-      present: s.value_prop,
-      quality:
-        s.value_prop && md && md.length >= 120 && md.length <= 180
-          ? "good"
-          : "poor",
-      suggestion: s.value_prop
-        ? "Refine meta/hero copy to clarify value."
-        : "Add a clear value statement.",
-    },
-    {
-      section: "Social Proof",
-      present: s.social_proof,
-      quality: s.social_proof ? "good" : "poor",
-      suggestion: s.social_proof
-        ? undefined
-        : "Add testimonials or client logos.",
-    },
-    {
-      section: "Pricing",
-      present: s.pricing,
-      quality: s.pricing ? "good" : "poor",
-      suggestion: s.pricing
-        ? undefined
-        : "Display pricing or a clear pricing CTA.",
-    },
-    {
-      section: "Features",
-      present: s.features,
-      quality: s.features ? "good" : "poor",
-      suggestion: s.features
-        ? undefined
-        : "Outline 4–6 key features with bullets.",
-    },
-    {
-      section: "Faq",
-      present: s.faq,
-      quality: s.faq ? "poor" : "poor",
-      suggestion: s.faq ? "Use collapsible FAQ groups." : "Add a FAQ section.",
-    },
-    {
-      section: "Contact",
-      present: s.contact,
-      quality: s.contact ? "good" : "poor",
-      suggestion: s.contact ? undefined : "Add a visible contact CTA/form.",
-    },
-    {
-      section: "Footer",
-      present: s.footer,
-      quality: s.footer ? "good" : "poor",
-      suggestion: s.footer ? undefined : "Add privacy/terms/social links.",
-    },
-  ];
-  const imgs = input.images?.total ?? 0;
-  const missAlt = input.images?.missingAlt ?? 0;
-  if (imgs > 0 && missAlt > 0) {
-    list.push({
-      section: "Images",
-      present: true,
-      quality: "poor",
-      suggestion: "Add ALT text to non-decorative images.",
-    });
-  }
-  return list;
-}
-
-function computeScore(findings: Suggestion[], audit: ContentAuditItem[]) {
-  let score = 100;
-  for (const f of findings)
-    score -= f.impact === "high" ? 10 : f.impact === "medium" ? 5 : 2;
-  for (const c of audit) {
-    score -= c.present ? (c.quality === "poor" ? 2 : 0) : 5;
-  }
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-/* ---------------- handler ---------------- */
 
 export default async function handler(req: any, res: any) {
-  if ((req.method || "GET").toUpperCase() !== "GET") {
-    res.statusCode = 405;
-    res.end("Method Not Allowed");
-    return;
-  }
-
-  const url = normalizeUrl((req.query?.url as string) || "");
-  if (!url) {
-    res.statusCode = 400;
-    res.end("Missing url");
-    return;
-  }
-
   okHeaders(res);
-  write(res, "progress", { value: 8 });
-
   try {
-    // fetch page HTML
-    const { status, url: finalUrl, text: html } = await fetchText(url);
-    write(res, "progress", { value: 28 });
+    const qUrl = (req.query?.url as string) || "";
+    const url = normalizeUrl(qUrl);
+    if (!url) {
+      write(res, "result", { error: "Missing URL" });
+      return res.end();
+    }
 
-    // basic extraction
-    const lang = extract(html, /<html[^>]+lang\s*=\s*["']?([a-zA-Z-]+)[^>]*>/i);
+    write(res, "progress", { value: 8 });
+
+    const { status, url: finalUrl, text: html } = await fetchText(url);
+
+    write(res, "progress", { value: 22 });
+
     const title = extract(html, /<title>([\s\S]*?)<\/title>/i);
     const description =
       extract(
@@ -478,72 +376,70 @@ export default async function handler(req: any, res: any) {
         html,
         /<meta\s+property=["']og:description["']\s+content=["']([\s\S]*?)["'][^>]*>/i
       );
-    const viewport = extract(
-      html,
-      /<meta\s+name=["']viewport["']\s+content=["']([\s\S]*?)["'][^>]*>/i
-    );
     const canonical = extract(
       html,
       /<link\s+rel=["']canonical["']\s+href=["']([^"']+)["'][^>]*>/i
     );
 
-    const og: Record<string, string | undefined> = {};
-    const tw: Record<string, string | undefined> = {};
-    const metaPairs = html.match(/<meta[^>]+>/gi) || [];
-    for (const tag of metaPairs) {
-      const prop =
-        (tag.match(/\bproperty\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
-        (tag.match(/\bproperty\s*=\s*('([^']+)')/i) || [])[2];
-      const name =
-        (tag.match(/\bname\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
-        (tag.match(/\bname\s*=\s*('([^']+)')/i) || [])[2];
-      const content =
-        (tag.match(/\bcontent\s*=\s*("([^"]+)"|'([^']+)')/i) || [])[2] ||
-        (tag.match(/\bcontent\s*=\s*('([^']+)')/i) || [])[2];
-      const key = (prop || name || "").toLowerCase();
-      if (key.startsWith("og:")) og[key] = content;
-      if (key.startsWith("twitter:")) tw[key] = content;
+    const h1Count = count(html, "h1");
+    const h2Count = count(html, "h2");
+    const h3Count = count(html, "h3");
+
+    const { total: imgTotal, missing: imgMissing } = countImgsMissingAlt(html);
+
+    const baseHost = (() => {
+      try {
+        return new URL(finalUrl || url).host;
+      } catch {
+        return null;
+      }
+    })();
+    const { total: linkTotal, internal, external } = countLinks(html, baseHost);
+
+    const origin = (() => {
+      try {
+        const u = new URL(finalUrl || url);
+        return `${u.protocol}//${u.host}`;
+      } catch {
+        return null;
+      }
+    })();
+    let robotsTxtOk: boolean | null = null;
+    let sitemapOk: boolean | null = null;
+    let robotsTxtUrl: string | undefined;
+    let sitemapUrlGuess: string | undefined;
+    if (origin) {
+      robotsTxtUrl = `${origin}/robots.txt`;
+      sitemapUrlGuess = `${origin}/sitemap.xml`;
+      robotsTxtOk = await (async () => {
+        try {
+          const r = await fetch(robotsTxtUrl!);
+          return r.status < 400;
+        } catch {
+          return false;
+        }
+      })();
+      sitemapOk = await (async () => {
+        try {
+          const r = await fetch(sitemapUrlGuess!);
+          return r.status < 400;
+        } catch {
+          return false;
+        }
+      })();
     }
 
-    // headings / counts
-    const headingsOutline = parseHeadings(html);
-    const h1Count = countTags(html, "h1");
-    const h2Count = countTags(html, "h2");
-    const h3Count = countTags(html, "h3");
+    write(res, "progress", { value: 48 });
 
-    // images
-    const { total: imgTotal, missing: missingAlt } = countImgsMissingAlt(html);
-    write(res, "progress", { value: 52 });
-
-    // links
-    const baseUrl = new URL(finalUrl || url);
-    const {
-      total: linkTotal,
-      internal,
-      external,
-    } = countLinks(html, baseUrl.host);
-
-    // robots/sitemap
-    const origin = `${baseUrl.protocol}//${baseUrl.host}`;
-    const robotsTxtUrl = `${origin}/robots.txt`;
-    const sitemapUrlGuess = `${origin}/sitemap.xml`;
-    const robotsTxtOk = await fetchHead(robotsTxtUrl);
-    const sitemapOk = await fetchHead(sitemapUrlGuess);
-
-    // text snippet (for section heuristics on client)
-    const text_snippets = stripTags(
-      html
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    ).slice(0, 15000);
-
-    write(res, "progress", { value: 76 });
-
-    // assemble base object (also used by client enrichment)
-    const base: any = {
+    const report: FullReport = {
       page: { url: finalUrl || url, title },
-      assets: { screenshot_url: screenshotUrl(finalUrl || url) },
-      meta: { title, description, lang, viewport, canonical },
+      assets: {
+        screenshot_url:
+          screenshotPrimary(finalUrl || url) ||
+          screenshotBackup(finalUrl || url),
+      },
+      screenshots: { hero: screenshotPrimary(finalUrl || url) || null },
+      meta: { description, canonical },
       seo: {
         h1Count,
         h2Count,
@@ -551,38 +447,109 @@ export default async function handler(req: any, res: any) {
         canonicalPresent: !!canonical,
         metaDescriptionPresent: !!description,
       },
-      social: { og, twitter: tw },
+      images: { total: imgTotal, missingAlt: imgMissing },
       links: { total: linkTotal, internal, external },
-      images: { total: imgTotal, missingAlt },
-      robots: { robotsTxtUrl, robotsTxtOk, sitemapOk },
-      text_snippets,
+      robots: { robotsTxtUrl, robotsTxtOk, sitemapUrlGuess, sitemapOk },
+      text_snippets: stripTags(html).slice(0, 4000),
     };
 
-    // server-side enrich for Full report (so UI uzreiz ir bagātāks)
-    const sections_detected = deriveSectionsDetected(base);
-    const content_audit = serverContentAudit(base);
-    const findings = serverFindings(base);
-    const quick_wins = serverQuickWins(base);
-    const prioritized_backlog = serverBacklog(base);
-    const score = computeScore(findings, content_audit);
+    write(res, "progress", { value: 70 });
 
-    const result: FullReport = {
-      ...base,
-      sections_detected,
-      content_audit,
-      findings,
-      quick_wins,
-      prioritized_backlog,
-      score,
-      screenshots: { hero: base.assets.screenshot_url },
-    };
+    report.sections_detected = sectionsDetected(report);
+    report.findings = findings(report);
+    report.quick_wins = quickWins(report);
+    report.prioritized_backlog = backlog(report);
 
-    write(res, "result", result);
+    // Content audit saraksts
+    report.content_audit = [
+      {
+        section: "Hero",
+        present: !!report.sections_detected?.hero,
+        quality: (report.seo?.h1Count ?? 0) === 1 ? "good" : "poor",
+        suggestion:
+          (report.seo?.h1Count ?? 0) === 1
+            ? undefined
+            : "Add a single clear H1 with the value proposition and a primary CTA.",
+      },
+      {
+        section: "Value Prop",
+        present: !!report.sections_detected?.value_prop,
+        quality:
+          report.meta?.description &&
+          report.meta.description.length >= 120 &&
+          report.meta.description.length <= 180
+            ? "good"
+            : "poor",
+        suggestion: report.meta?.description
+          ? "Refine the meta description to ~150 chars with a clear benefit."
+          : "Add a clear value statement in the hero/meta description.",
+      },
+      {
+        section: "Social Proof",
+        present: !!report.sections_detected?.social_proof,
+        quality: !!report.sections_detected?.social_proof ? "good" : "poor",
+        suggestion: !!report.sections_detected?.social_proof
+          ? undefined
+          : "Include testimonials or client logos.",
+      },
+      {
+        section: "Pricing",
+        present: !!report.sections_detected?.pricing,
+        quality: !!report.sections_detected?.pricing ? "good" : "poor",
+        suggestion: !!report.sections_detected?.pricing
+          ? undefined
+          : "Display pricing or ‘Request pricing’ CTA.",
+      },
+      {
+        section: "Features",
+        present: !!report.sections_detected?.features,
+        quality: !!report.sections_detected?.features ? "good" : "poor",
+        suggestion: !!report.sections_detected?.features
+          ? undefined
+          : "Outline 4–6 key features in bullets.",
+      },
+      {
+        section: "Faq",
+        present: !!report.sections_detected?.faq,
+        quality: !!report.sections_detected?.faq ? "poor" : "poor",
+        suggestion: !!report.sections_detected?.faq
+          ? "Use collapsible FAQ for quick scanning."
+          : "Add a FAQ section.",
+      },
+      {
+        section: "Contact",
+        present: !!report.sections_detected?.contact,
+        quality: !!report.sections_detected?.contact ? "good" : "poor",
+        suggestion: !!report.sections_detected?.contact
+          ? undefined
+          : "Add a visible contact CTA/form in header/footer.",
+      },
+      {
+        section: "Footer",
+        present: !!report.sections_detected?.footer,
+        quality: !!report.sections_detected?.footer ? "good" : "poor",
+        suggestion: !!report.sections_detected?.footer
+          ? undefined
+          : "Include links to privacy, terms, social profiles.",
+      },
+      ...(report.images && report.images.total && report.images.missingAlt
+        ? [
+            {
+              section: "Images",
+              present: true,
+              quality: "poor",
+              suggestion: "Add ALT text to non-decorative images.",
+            } as ContentAuditItem,
+          ]
+        : []),
+    ];
+
+    write(res, "progress", { value: 90 });
+
+    write(res, "result", report);
     res.end();
-  } catch (err: any) {
-    write(res, "error", { message: err?.message || "Analyze stream failed" });
-    try {
-      res.end();
-    } catch {}
+  } catch (e: any) {
+    write(res, "result", { error: e?.message || "Stream failed" });
+    res.end();
   }
 }
