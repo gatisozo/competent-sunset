@@ -661,7 +661,8 @@ export default function Landing({
               <div className="text-sm font-medium text-slate-700">
                 Your quick snapshot
               </div>
-              <GradeBadge value={safePct(overallScore)} />
+              {/* FIX: value -> score */}
+              <GradeBadge score={safePct(overallScore)} />
             </div>
 
             <div className="mt-4 grid gap-3 text-sm text-slate-700">
