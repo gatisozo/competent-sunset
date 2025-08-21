@@ -9,7 +9,7 @@ import { runAnalyze } from "./lib/analyzeClient";
 type LandingProps = {
   freeReport?: any;
   onRunTest?: (url: string) => Promise<void> | void;
-  onOrderFull?: (url?: string) => void; // ⬅︎ pieņem URL no Landing
+  onOrderFull?: () => void;
   onSeeSample?: () => void;
 };
 
@@ -44,7 +44,7 @@ type AnalyzeData = {
     sitemapUrlGuess?: string;
     sitemapOk?: boolean | null;
   };
-  headingsOutline?: Array<{ tag: string; text: string }>;
+  // headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
 function safePct(n?: number) {
@@ -57,21 +57,39 @@ const BLUR_TABS = new Set(["Findings", "Content Audit", "Copy Suggestions"]);
 const DEV_MODE =
   (typeof import.meta !== "undefined" && (import.meta as any).env?.DEV) ||
   (typeof import.meta !== "undefined" &&
-    (import.meta as any).env?.VITE_DEV_MODE === "1");
+    (import.meta as any).env?.VITE_DEV_MODE) ||
+  false;
 
-// ── Helpers (null-safe) ────────────────────────────────────────────────────────
-const clamp = (s: string, max: number) =>
-  s.length > max ? s.slice(0, max - 1) + "…" : s;
-function hostFromUrl(u?: string) {
+function normalizeUrl(input: string): string {
+  let s = (input ?? "").trim();
+  if (!s) return s;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
   try {
-    return u ? new URL(u).host : "";
+    const u = new URL(s);
+    if (!["http:", "https:"].includes(u.protocol)) throw new Error();
+    u.hash = "";
+    return u.toString();
   } catch {
-    return "";
+    return s;
   }
+}
+function hostFromUrl(u?: string | null) {
+  if (!u) return "";
+  try {
+    return new URL(u).host || "";
+  } catch {
+    return u.replace(/^https?:\/\//, "");
+  }
+}
+function clamp(s: string, len = 160) {
+  const t = (s || "").trim();
+  if (t.length <= len) return t;
+  return t.slice(0, len - 1) + "…";
 }
 function firstHeadingText(data?: AnalyzeData | null): string | undefined {
   if (!data) return undefined;
-  const ho: Array<{ tag: string; text: string }> = data.headingsOutline ?? [];
+  const ho: Array<{ tag: string; text: string }> =
+    (data as any)?.headingsOutline ?? [];
   const h1 = ho.find((h) => h.tag?.toLowerCase() === "h1")?.text;
   return h1 || ho[0]?.text || undefined;
 }
@@ -94,107 +112,50 @@ function canonicalSuggestion(data?: AnalyzeData | null): string {
     return "https://example.com/";
   }
 }
-function normalizeUrl(u: string) {
-  return u?.trim().startsWith("http") ? u.trim() : `https://${u?.trim()}`;
-}
-
-// ── Lift (≈ % leads) heuristikas ──────────────────────────────────────────────
-function liftHero(d?: AnalyzeData | null) {
-  const h1c = d?.seo?.h1Count ?? 0;
-  return h1c !== 1 ? 12 : 8; // ja nav skaidrs H1 – lielāks lifts
-}
-function liftMetaDesc(d?: AnalyzeData | null) {
-  if (!d?.seo?.metaDescriptionPresent) return 4;
-  const len = d?.meta?.description?.length ?? 0;
-  if (len < 140 || len > 160) return 2;
-  return 1;
-}
-function liftAlt(d?: AnalyzeData | null) {
-  const total = d?.images?.total ?? 0;
-  const miss = d?.images?.missingAlt ?? 0;
-  if (total <= 0) return 0;
-  const ratio = miss / total; // 0..1
-  return Math.round(Math.min(3, 3 * ratio)); // līdz 3%
-}
-function liftH1(d?: AnalyzeData | null) {
-  const h1c = d?.seo?.h1Count ?? 0;
-  return h1c !== 1 ? 6 : 0;
-}
-function liftCanonical(d?: AnalyzeData | null) {
-  return d?.seo?.canonicalPresent ? 0 : 1;
-}
-function liftRobots(d?: AnalyzeData | null) {
-  return d?.robots?.robotsTxtOk ? 0 : 1;
-}
-function liftSitemap(d?: AnalyzeData | null) {
-  return d?.robots?.sitemapOk ? 0 : 1;
-}
-function liftSocial(d?: AnalyzeData | null) {
-  const og = Object.values(d?.social?.og ?? {}).filter(Boolean).length;
-  const tw = Object.values(d?.social?.twitter ?? {}).filter(Boolean).length;
-  if (og + tw === 0) return 2;
-  if (og + tw < 3) return 1;
-  return 0;
-}
-function liftInternal(d?: AnalyzeData | null) {
-  const internal = d?.links?.internal ?? 0;
-  return internal < 5 ? 3 : 1;
-}
 
 export default function Landing({
-  freeReport: _freeReport,
+  freeReport,
   onRunTest,
   onOrderFull,
   onSeeSample,
 }: LandingProps) {
   const [url, setUrl] = useState("");
+  const [data, setData] = useState<AnalyzeData | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [showResults, setShowResults] = useState(false);
-  // “Overall” tabs izņemts — sākam ar “Sections Present”
-  const [activeTab, setActiveTab] = useState<string>("Sections Present");
-  const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
+  const [showResults, setShowResults] = useState(false);
+  const [lastTestedUrl, setLastTestedUrl] = useState<string>("");
 
-  const [data, setData] = useState<AnalyzeData | null>(null);
-  const [overallScore, setOverallScore] = useState<number>(73);
-  const [structurePct, setStructurePct] = useState<number>(76);
-  const [contentPct, setContentPct] = useState<number>(70);
+  const [overallScore, setOverallScore] = useState<number>(0);
+  const [structurePct, setStructurePct] = useState<number>(0);
+  const [contentPct, setContentPct] = useState<number>(0);
 
   const previewRef = useRef<HTMLDivElement | null>(null);
-  const rafRef = useRef<number | null>(null);
 
-  // ── Score no reālajiem datiem ───────────────────────────────────────────────
-  const computeScores = (d: AnalyzeData | null) => {
-    if (!d) return { overall: 0, structure: 0, content: 0 };
-    let score = 50;
-    if (d.seo?.metaDescriptionPresent) score += 8;
-    if (d.seo?.canonicalPresent) score += 6;
-    if ((d.seo?.h1Count ?? 0) === 1) score += 6;
-    if ((d.seo?.h2Count ?? 0) >= 2) score += 4;
-    const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
-    const twCount = Object.values(d.social?.twitter ?? {}).filter(
-      Boolean
-    ).length;
-    score += Math.min(ogCount + twCount, 6);
-    const imgs = d.images?.total ?? 0;
-    const miss = d.images?.missingAlt ?? 0;
-    if (imgs > 0) {
-      const altRatio = (imgs - miss) / imgs;
-      score += Math.round(10 * altRatio);
+  useEffect(() => {
+    if (DEV_MODE && typeof window !== "undefined") {
+      const qs = new URLSearchParams(window.location.search);
+      const u = qs.get("url");
+      if (u) setUrl(u);
     }
-    const links = d.links?.total ?? 0;
-    if (links >= 5) score += 4;
-    if (d.robots?.robotsTxtOk) score += 3;
-    if (d.robots?.sitemapOk) score += 3;
+  }, []);
 
+  // ── scoring (rough) — null-safe ────────────────────────────────────────────
+  const computeScores = (d: AnalyzeData) => {
+    let score = 30;
+
+    // structure part: headings, canonical
     let structure = 30;
+    structure += Math.min(20, (d.seo?.h1Count ?? 0) * 10);
     structure += Math.min(20, (d.seo?.h2Count ?? 0) * 4);
     structure += d.seo?.canonicalPresent ? 10 : 0;
     structure = Math.min(100, Math.max(0, structure));
 
     let content = 30;
     content += d.seo?.metaDescriptionPresent ? 15 : 0;
+    const imgs = d.images?.total ?? 0;
+    const miss = d.images?.missingAlt ?? 0;
     content += Math.min(15, imgs > 0 ? 10 : 0);
     content += Math.min(
       10,
@@ -211,80 +172,85 @@ export default function Landing({
     const d = data;
     if (!d) return [] as { title: string; ok: boolean; why?: string }[];
 
-    const ho: Array<{ tag: string; text: string }> = d.headingsOutline ?? [];
+    const ho: Array<{ tag: string; text: string }> =
+      (d as any).headingsOutline ?? [];
     const headingsText = ho.map((h) => h.text?.toLowerCase() || "").join(" | ");
     const hHas = (kw: string | RegExp) =>
       typeof kw === "string"
         ? headingsText.includes(kw.toLowerCase())
         : kw.test(headingsText);
 
-    const metaTitle = (d.meta?.title || "").toLowerCase();
-    const metaDesc = (d.meta?.description || "").toLowerCase();
-    const metaText = `${metaTitle} ${metaDesc}`;
-
     const sections: { title: string; ok: boolean; why?: string }[] = [];
-    const heroOk = (d.seo?.h1Count ?? 0) >= 1 || !!metaTitle;
+
+    // hero
+    const heroOk = (d.seo?.h1Count ?? 0) >= 1 || hHas(/book|try|start|get/i);
     sections.push({
       title: "hero",
-      ok: heroOk,
-      why: heroOk ? "Found H1/meta title" : "No clear H1/title",
+      ok: !!heroOk,
+      why: heroOk ? "H1 + CTA likely present" : "No clear H1/CTA detected",
     });
 
-    const socialOk = hHas(
-      /testimonial|review|clients|trusted|partners|logos?/i
-    );
+    // value prop
+    const vOk = !!d.meta?.description && d.meta.description.length >= 120;
+    sections.push({
+      title: "value prop",
+      ok: !!vOk,
+      why: vOk
+        ? "Meta description present"
+        : "Meta description not found or too short",
+    });
+
+    // social proof
+    const metaText = [
+      d.meta?.title || "",
+      d.meta?.description || "",
+      headingsText || "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    const socialOk = /testimonial|review|trust|clients|logos?/.test(metaText);
     sections.push({
       title: "social proof",
       ok: !!socialOk,
-      why: socialOk
-        ? "Headings mention social proof"
-        : "No testimonials/reviews headings",
+      why: socialOk ? "Mentions of testimonials/logos" : "Not detected",
     });
 
-    const featuresOk = hHas(/feature|benefit|what you get|capabilit(y|ies)/i);
-    sections.push({
-      title: "features",
-      ok: !!featuresOk,
-      why: featuresOk ? "Headings mention features" : "No features headings",
-    });
-
-    const contactOk = hHas(/contact|get in touch|support|help/i);
-    sections.push({
-      title: "contact",
-      ok: !!contactOk,
-      why: contactOk ? "Found contact-related heading" : "No contact heading",
-    });
-
-    const valuePropOk =
-      (d.meta?.description?.length ?? 0) >= 50 ||
-      hHas(/we help|we (are|do)|our (product|solution)|why (choose|us)/i);
-    sections.push({
-      title: "value prop",
-      ok: !!valuePropOk,
-      why: valuePropOk
-        ? "Meta/heading describes value"
-        : "Weak value statement",
-    });
-
-    const pricingOk = hHas(/pricing|price|plans?/i);
+    // pricing
+    const pricingOk = /price|pricing|plan|invest/i.test(metaText);
     sections.push({
       title: "pricing",
       ok: !!pricingOk,
-      why: pricingOk ? "Found pricing/plans heading" : "No pricing section",
+      why: pricingOk ? "Pricing hints found" : "Pricing not detected",
     });
 
-    const faqOk = hHas(/faq|frequently asked|questions/i);
+    // features
+    const featuresOk = /feature|benefit|capabilit/i.test(metaText);
+    sections.push({
+      title: "features",
+      ok: !!featuresOk,
+      why: featuresOk ? "Feature-related text" : "No features detected",
+    });
+
+    // faq
+    const faqOk = /faq|frequently asked|question/i.test(metaText);
     sections.push({
       title: "faq",
       ok: !!faqOk,
-      why: faqOk ? "Found FAQ heading" : "No FAQ heading",
+      why: faqOk ? "FAQ-related text" : "FAQ not detected",
     });
 
+    // contact
+    const contactOk = /contact|support|help|email|phone|reach/.test(metaText);
+    sections.push({
+      title: "contact",
+      ok: !!contactOk,
+      why: contactOk ? "Contact-related text" : "No obvious contact block",
+    });
+
+    // footer
     const footerOk =
       (d.links?.total ?? 0) >= 8 &&
-      (hHas(/privacy|terms/i) ||
-        metaText.includes("privacy") ||
-        metaText.includes("terms"));
+      (metaText.includes("privacy") || metaText.includes("terms"));
     sections.push({
       title: "footer",
       ok: !!footerOk,
@@ -294,44 +260,20 @@ export default function Landing({
     return sections;
   }, [data]);
 
-  // ── Quick Wins (Esošais vs Ieteicamais + ≈ lift) — null-safe ───────────────
+  // ── Quick Wins (Esošais vs Ieteicamais) — null-safe ────────────────────────
   const quickWinsRows = useMemo(() => {
     if (!data)
-      return [] as {
-        field: string;
-        current: string;
-        suggested: string;
-        lift: number;
-      }[];
+      return [] as { field: string; current: string; suggested: string }[];
     const d = data;
-    const rows: {
-      field: string;
-      current: string;
-      suggested: string;
-      lift: number;
-    }[] = [];
-
-    // Hero text (ja pieejams) + ieteikums
-    const heroCurrent = firstHeadingText(d) || d.meta?.title || "";
-    const heroSuggested = heroCurrent
-      ? clamp(`${heroCurrent} — Clear value. Start in minutes.`, 90)
-      : "Add a clear value headline (what, for whom, primary benefit).";
-    rows.push({
-      field: "Hero text",
-      current: heroCurrent || "Nav atrasts",
-      suggested: heroSuggested,
-      lift: liftHero(d),
-    });
+    const rows: { field: string; current: string; suggested: string }[] = [];
 
     // Meta description
     const desc = d.meta?.description;
-    const mdLift = liftMetaDesc(d);
     if (!desc) {
       rows.push({
         field: "Meta description",
         current: "Nav atrasts",
         suggested: suggestMeta(d),
-        lift: mdLift,
       });
     } else {
       let note = "";
@@ -339,68 +281,33 @@ export default function Landing({
       if (desc.length > 160) note = " (par garu — ≤160 rakstzīmes)";
       rows.push({
         field: "Meta description",
-        current: clamp(desc, 200) + note,
-        suggested: suggestMeta(d),
-        lift: mdLift,
+        current: desc,
+        suggested: suggestMeta(d) + note,
       });
     }
 
-    // ALT teksti
-    const altLift = liftAlt(d);
-    const imgs = d.images?.total ?? 0;
-    const miss = d.images?.missingAlt ?? 0;
-    if (imgs > 0) {
-      const ratio = Math.round((miss / Math.max(1, imgs)) * 100);
-      rows.push({
-        field: "Image ALT texts",
-        current:
-          miss > 0
-            ? `Trūkst: ${miss}/${imgs} (~${ratio}%)`
-            : "OK — ALT pārsvarā ir",
-        suggested:
-          'Pievienot īsus, aprakstošus ALT (piem., “Produkts – galvenā īpašība”). Dekoratīviem attēliem alt="".',
-        lift: altLift,
-      });
-    }
-
-    // H1
+    // ALT text
+    const total = d.images?.total ?? 0;
+    const missing = d.images?.missingAlt ?? 0;
+    let altNote =
+      missing > 0
+        ? `Trūkst ALT pie ${missing} no ${total} attēliem`
+        : "OK (nav trūkstošu ALT)";
     rows.push({
-      field: "H1 virsraksti",
-      current: `${d.seo?.h1Count ?? 0} uz lapu`,
-      suggested: "Nodrošināt tieši 1 H1 ar galveno nolūku/atslēgvārdu.",
-      lift: liftH1(d),
+      field: "ALT text",
+      current: total ? altNote : "Nav attēlu",
+      suggested:
+        "Īss, aprakstošs ALT teksts tikai nedekoratīviem attēliem; dekoratīviem — tukšs alt.",
     });
 
     // Canonical
-    const hasCanonical = !!d.seo?.canonicalPresent || !!d.meta?.canonical;
     rows.push({
-      field: "Canonical",
-      current: hasCanonical ? d.meta?.canonical || "Ir" : "Nav",
-      suggested: hasCanonical
-        ? "Pārbaudīt vai norāda uz kanonisko bez parametriem"
-        : `Pievienot <link rel="canonical" href="${canonicalSuggestion(d)}">`,
-      lift: liftCanonical(d),
+      field: "Canonical URL",
+      current: d.meta?.canonical || "Nav",
+      suggested: canonicalSuggestion(d),
     });
 
-    // Robots / Sitemap
-    rows.push({
-      field: "robots.txt",
-      current: d.robots?.robotsTxtOk ? "OK" : "Nav/nesasniedzams",
-      suggested: d.robots?.robotsTxtOk
-        ? "Pievienot arī sitemap norādi robots.txt failā"
-        : "Publicēt /robots.txt ar piemērotiem noteikumiem",
-      lift: liftRobots(d),
-    });
-    rows.push({
-      field: "sitemap.xml",
-      current: d.robots?.sitemapOk ? "OK" : "Nav/nesasniedzams",
-      suggested: d.robots?.sitemapOk
-        ? "Sekot, lai sitemap atjaunojas automātiski"
-        : "Publicēt /sitemap.xml un norādīt to robots.txt",
-      lift: liftSitemap(d),
-    });
-
-    // Social tags
+    // Social meta (OG/Twitter)
     const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
     const twCount = Object.values(d.social?.twitter ?? {}).filter(
       Boolean
@@ -413,118 +320,81 @@ export default function Landing({
           : "Trūkst",
       suggested:
         "Pievienot og:title, og:description, og:image, og:url, twitter:card u.c. kopīgošanas bagātinājumiem.",
-      lift: liftSocial(d),
     });
 
     // Internal links
-    const total = d.links?.total ?? 0;
+    const total2 = d.links?.total ?? 0;
     const internal = d.links?.internal ?? 0;
     rows.push({
       field: "Iekšējās saites",
-      current: `Kopā ${total} · Iekšējās ${internal}`,
+      current: `Kopā ${total2} · Iekšējās ${internal}`,
       suggested:
         "Vismaz 5+ iekšējās saites uz galvenajām lapām (produkts, cenas, kontakti, FAQ).",
-      lift: liftInternal(d),
     });
 
     return rows;
   }, [data]);
 
-  // ── Backlog (Esošais vs Ieteicamais + priority/effort + ≈ lift) — null-safe ─
+  // ── Backlog (Esošais vs Ieteicamais + priority/effort) — null-safe ─────────
   const backlogRows = useMemo(() => {
     if (!data)
       return [] as {
         task: string;
         current: string;
         suggested: string;
-        priority: "low" | "med" | "high";
+        priority: "high" | "med" | "low";
         effort: string;
-        lift: number;
       }[];
+
     const d = data;
     const rows: {
       task: string;
       current: string;
       suggested: string;
-      priority: "low" | "med" | "high";
+      priority: "high" | "med" | "low";
       effort: string;
-      lift: number;
     }[] = [];
 
+    // Hero / H1
     const h1c = d.seo?.h1Count ?? 0;
     if (h1c !== 1) {
       rows.push({
-        task: "H1 struktūra",
-        current: `${h1c} H1 uz lapu`,
-        suggested: "Iestatīt tieši 1 H1 ar skaidru vērtības piedāvājumu.",
+        task: "Hero / H1",
+        current: `H1 skaits: ${h1c}`,
+        suggested:
+          "Viena spēcīga H1 virsraksta un CTA kombinācija virs loka (above the fold).",
         priority: "high",
-        effort: "1–2h",
-        lift: liftH1(d),
+        effort: "1–2d",
       });
     }
 
-    if (
-      !d.seo?.metaDescriptionPresent ||
-      (d.meta?.description &&
-        (d.meta.description.length < 140 || d.meta.description.length > 160))
-    ) {
+    // Meta description
+    const desc = d.meta?.description || "";
+    if (!desc || desc.length < 140 || desc.length > 180) {
       rows.push({
         task: "Meta description",
-        current: d.meta?.description ? clamp(d.meta.description, 200) : "Nav",
-        suggested: suggestMeta(d),
-        priority: "med",
+        current: desc ? `${desc.length} rakstzīmes` : "Nav",
+        suggested: "Pārrakstīt uz 145–160 rakstzīmēm ar ieguvumu + zīmolu.",
+        priority: "low",
         effort: "1–2h",
-        lift: liftMetaDesc(d),
       });
     }
 
-    if (!d.seo?.canonicalPresent) {
-      rows.push({
-        task: "Canonical",
-        current: "Nav",
-        suggested: canonicalSuggestion(d),
-        priority: "med",
-        effort: "1h",
-        lift: liftCanonical(d),
-      });
-    }
-
+    // ALT text
     const imgs = d.images?.total ?? 0;
     const miss = d.images?.missingAlt ?? 0;
     if (imgs > 0 && miss > 0) {
       rows.push({
-        task: "ALT teksti",
-        current: `Trūkst: ${miss}/${imgs}`,
+        task: "ALT text",
+        current: `Trūkst ${miss} no ${imgs}`,
         suggested:
-          "Pievienot ALT visiem nedekoratīviem attēliem; īss, aprakstošs teksts.",
-        priority: "med",
+          "Aizpildīt ALT tikai nedekoratīviem attēliem; dekoratīviem — tukšs alt.",
+        priority: "low",
         effort: "2–4h",
-        lift: liftAlt(d),
       });
     }
 
-    if (!d.robots?.robotsTxtOk) {
-      rows.push({
-        task: "robots.txt",
-        current: "Nav/nesasniedzams",
-        suggested: "Publicēt /robots.txt un iekļaut sitemap norādi.",
-        priority: "med",
-        effort: "1h",
-        lift: liftRobots(d),
-      });
-    }
-    if (!d.robots?.sitemapOk) {
-      rows.push({
-        task: "sitemap.xml",
-        current: "Nav/nesasniedzams",
-        suggested:
-          "Publicēt /sitemap.xml (dinamiski ģenerētu) un norādīt robots.txt.",
-        priority: "med",
-        effort: "1–2h",
-        lift: liftSitemap(d),
-      });
-    }
-
+    // OG/Twitter
     const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
     const twCount = Object.values(d.social?.twitter ?? {}).filter(
       Boolean
@@ -537,7 +407,6 @@ export default function Landing({
         suggested: "og:title, og:description, og:image, og:url, twitter:card",
         priority: "low",
         effort: "1–2h",
-        lift: liftSocial(d),
       });
     }
 
@@ -550,103 +419,59 @@ export default function Landing({
         suggested: "Pievienot 5–10 iekšējās saites uz galvenajām ceļa lapām.",
         priority: "med",
         effort: "2–4h",
-        lift: liftInternal(d),
       });
     }
 
-    // papildus: ja trūkst noteiktas sadaļas (no “Sections Present”)
+    // papildus: ja trūkst noteiktas sadaļas
     const secMap = Object.fromEntries(
-      (derivedSections || []).map((s) => [s.title, s.ok])
-    );
-    if (secMap["pricing"] === false) {
+      derivedSections.map((s) => [s.title, s.ok] as const)
+    ) as Record<string, boolean>;
+    if (!secMap["faq"])
       rows.push({
-        task: "Pricing/Plans sadaļa",
-        current: "Nav atrasta",
-        suggested: "Pievienot skaidru cenu plānu salīdzinājumu ar CTA.",
-        priority: "med",
-        effort: "1–2d",
-        lift: 4,
-      });
-    }
-    if (secMap["faq"] === false) {
-      rows.push({
-        task: "FAQ sadaļa",
-        current: "Nav atrasta",
-        suggested: "Pievienot 6–10 biežākos jautājumus ar īsām atbildēm.",
+        task: "FAQ",
+        current: "Trūkst / vāja",
+        suggested: "Sakārtot populārākos jautājumus; akordeona formāts.",
         priority: "med",
         effort: "0.5–1d",
-        lift: 3,
       });
-    }
-    if (secMap["social proof"] === false) {
+    if (!secMap["social proof"])
       rows.push({
-        task: "Testimonials/Logos",
-        current: "Nav atrasti",
-        suggested: "Pievienot klientu atsauksmes vai logo rindu (min. 6).",
+        task: "Sociālie pierādījumi",
+        current: "Nav / vāji",
+        suggested:
+          "2–3 īsas atsauksmes ar vārdu/uzvārdu/āmatu + logo josla, ja iespējams.",
         priority: "high",
         effort: "1–2d",
-        lift: 6,
       });
-    }
-
-    // Hero teksta uzlabojums kā backlog (ja vajag)
-    if (!firstHeadingText(d)) {
-      rows.push({
-        task: "Hero text",
-        current: "Nav skaidra hero virsraksta",
-        suggested: "Pievienot skaidru vērtības virsrakstu virs pirmā ekrāna.",
-        priority: "high",
-        effort: "1–2h",
-        lift: liftHero(d),
-      });
-    }
 
     return rows;
   }, [data, derivedSections]);
 
-  // ── Progress animācija ──────────────────────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-  function startProgress() {
-    setProgress(0);
-    const tick = () => {
-      setProgress((p) => {
-        if (!loading) return p;
-        const next = Math.min(90, p + Math.random() * 6 + 1);
-        return next;
-      });
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-  }
+  // ── quick % lifts (vienkāršots) ────────────────────────────────────────────
+  const quickWinsLift = useMemo(() => {
+    if (!data) return 0;
+    let pct = 0;
+    if (!data.meta?.description || data.meta.description.length < 140) pct += 4;
+    if ((data.images?.missingAlt ?? 0) > 0) pct += 3;
+    if (!data.seo?.canonicalPresent) pct += 1;
+    if ((data.links?.internal ?? 0) < 5) pct += 3;
+    return Math.min(15, pct || 9);
+  }, [data]);
 
-  // ── Reālā analīze ───────────────────────────────────────────────────────────
+  // ── UI handlers ────────────────────────────────────────────────────────────
   const runTestReal = async () => {
-    if (!url.trim()) return;
-    const normalized = normalizeUrl(url);
-    setLastTestedUrl(normalized);
-
-    setActiveTab("Sections Present");
-    setShowResults(false);
-    setLoading(true);
     setErr(null);
+    setLoading(true);
+    setProgress(20);
+    setShowResults(false);
     setData(null);
-    startProgress();
 
-    if (onRunTest) {
-      try {
-        await Promise.resolve(onRunTest(normalized));
-      } catch {}
-    }
-
-    const res = await runAnalyze(normalized);
-    setLoading(false);
+    const res = await runAnalyze(url.trim());
 
     if ((res as any).ok) {
+      setProgress(75);
       const d = (res as any).data as AnalyzeData;
+      setLastTestedUrl(d.finalUrl || d.url || url);
       setData(d);
       const sc = computeScores(d);
       setOverallScore(sc.overall);
@@ -671,72 +496,34 @@ export default function Landing({
     runTestReal();
   };
 
-  // ── Full report pārejas (pasniedzam pēdējo URL) ────────────────────────────
-  const resolvedAuditUrl = (
-    data?.finalUrl ||
-    data?.url ||
-    lastTestedUrl ||
-    (url.trim() ? normalizeUrl(url) : "")
-  ).trim();
+  // ── Full report pārejas (nemainītas) ────────────────────────────────────────
+  const resolvedAuditUrl =
+    lastTestedUrl || (url.trim() ? normalizeUrl(url) : "");
   const orderFullInternal = () => {
     const href = `/full?autostart=1${
-      resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
-    }${DEV_MODE ? "&dev=1" : ""}`;
-    window.location.href = href;
-  };
-  const seeSampleInternal = () => {
-    const href = `/full?dev=1${
       resolvedAuditUrl ? `&url=${encodeURIComponent(resolvedAuditUrl)}` : ""
     }`;
     window.location.href = href;
   };
+  const seeSampleInternal = () => {
+    window.location.href =
+      "/full?autostart=1&url=https%3A%2F%2Fskride.lv%2F&sample=1";
+  };
 
-  // ── UI helpers ─────────────────────────────────────────────────────────────
-  const TabButton = ({ name }: { name: string }) => (
-    <button
-      type="button"
-      onClick={() => setActiveTab(name)}
-      className={
-        "px-4 py-2 rounded-t-xl text-sm border " +
-        (activeTab === name
-          ? "bg-white border-slate-200 font-medium"
-          : "bg-slate-100/60 text-slate-700 border-transparent hover:bg-white")
-      }
-    >
-      {name}
-    </button>
-  );
-
-  const BlurPanel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <div className="relative">
-      <div className="pointer-events-none select-none blur-sm">{children}</div>
-      <div className="absolute inset-0 grid place-items-center">
-        <div className="rounded-xl bg-white/80 backdrop-blur border px-5 py-4 text-center shadow-sm">
-          <div className="text-sm text-slate-700">
-            Detailed view available in the Full Audit.
-          </div>
-          <button
-            onClick={() =>
-              onOrderFull ? onOrderFull(resolvedAuditUrl) : orderFullInternal()
-            }
-            className="mt-3 rounded-lg px-4 py-2 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
-          >
-            Order Full Audit
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const niceUrl = useMemo(
-    () => (data ? data.finalUrl || data.url || "" : ""),
-    [data]
-  );
+  // ── UI (Landing) ───────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<
+    | "Sections Present"
+    | "Quick Wins"
+    | "Prioritized Backlog"
+    | "Findings"
+    | "Content Audit"
+    | "Copy Suggestions"
+  >("Sections Present");
 
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
-      {/* NAV */}
-      <header className="sticky top-0 z-20 backdrop-blur bg-white/70 border-b">
+      {/* top bar */}
+      <header className="sticky top-0 z-30 backdrop-blur supports-[backdrop-filter]:bg-white/60 bg-white/80 border-b">
         <div className="mx-auto max-w-[1200px] px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-[#006D77]" />
@@ -768,46 +555,50 @@ export default function Landing({
 
       {/* HERO */}
       <section className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] to-[#83C5BE]" />
-        <div className="relative mx-auto max-w-[1200px] px-4 py-12 md:py-20 grid md:grid-cols-2 gap-8 items-center">
-          <div className="text-white">
-            <h1 className="text-3xl md:text-5xl font-bold leading-tight">
-              Get a Second Opinion on Your Website.
+        <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] via-[#83C5BE] to-[#EDF6F9]" />
+        <div className="relative mx-auto max-w-[1200px] grid md:grid-cols-2 gap-6 px-4 py-10 md:py-14 text-white">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 border border-white/20 px-3 py-1 text-xs">
+              Running in Draft/Test Mode; “Order Full Audit” opens the Full
+              report directly.
+            </div>
+            <h1 className="text-3xl md:text-5xl font-semibold tracking-tight mt-4">
+              Get a Second Opinion <br /> on Your Website.
             </h1>
-            <p className="mt-3 md:mt-4 text-base md:text-xl text-white/90">
+            <p className="mt-3 text-white/90">
               The AI tool that instantly grades your landing pages and gives you
               an action plan to hold your team accountable.
             </p>
-            <form
-              className="mt-5 flex gap-3"
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleRun();
-              }}
-            >
+            {/* input + buttons */}
+            <div className="mt-5 flex flex-col sm:flex-row gap-3">
               <input
-                aria-label="Enter your website URL"
-                placeholder="Enter your website URL"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                className="flex-1 rounded-xl px-4 py-3 bg-white/95 text-slate-900 placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#83C5BE]"
+                placeholder="Enter your website URL"
+                className="flex-1 rounded-xl px-4 py-3 text-slate-900 bg-white outline-none ring-0 focus:ring-2 focus:ring-white/60"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && url.trim()) handleRun();
+                }}
               />
               <button
-                type="submit"
+                onClick={handleRun}
                 disabled={loading || !url.trim()}
-                className="rounded-xl px-5 py-3 bg-[#FF6B6B] text-white font-semibold shadow-sm hover:opacity-90 disabled:opacity-60"
+                className="rounded-xl px-5 py-3 bg-white text-slate-900 font-medium hover:opacity-90 disabled:opacity-60"
               >
-                {loading ? "Running…" : "Run Free Test"}
+                {loading ? "Analyzing…" : "Run Free Test"}
               </button>
-            </form>
-            <div className="mt-3 flex flex-wrap items-center gap-4 text-white/80 text-sm">
+              <button
+                onClick={onOrderFull ?? orderFullInternal}
+                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+              >
+                Order Full Audit
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
-                No sign-up needed
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-white/80" />
-                No credit card required
+                No registration
               </div>
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-white/80" />
@@ -840,50 +631,104 @@ export default function Landing({
         </div>
       </section>
 
-      {/* PREVIEW */}
+      {/* PREVIEW / RESULTS */}
       <section
         id="preview"
         ref={previewRef}
-        className="mx-auto max-w-[1200px] px-3 md:px-4 py-10 md:py-14"
+        className="mx-auto max-w-[1200px] px-4 py-8"
       >
-        {loading && !showResults ? (
-          <div className="rounded-2xl border bg-white p-5">
-            <div className="text-slate-700 font-medium">
-              Analyzing your site…
-            </div>
-            <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
+        {/* progress + error */}
+        {(loading || progress > 0) && (
+          <div className="mb-4">
+            <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
               <div
-                className="h-full bg-[#006D77] transition-all"
-                style={{ width: `${progress}%` }}
+                className="h-full bg-[#006D77] transition-[width] duration-200"
+                style={{ width: `${Math.min(100, progress)}%` }}
               />
             </div>
-            <div className="mt-2 text-sm text-slate-600">
-              Progress: {progress}%
+          </div>
+        )}
+        {err && (
+          <div className="mb-4 rounded-lg border bg-rose-50 text-rose-800 px-3 py-2 text-sm">
+            {err}
+          </div>
+        )}
+
+        <div className="grid md:grid-cols-[1.1fr,0.9fr] gap-6">
+          {/* left: meta/seo snapshot */}
+          <div className="rounded-2xl border bg-white p-5 md:p-6">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-700">
+                Your quick snapshot
+              </div>
+              <GradeBadge value={safePct(overallScore)} />
             </div>
-          </div>
-        ) : !showResults ? (
-          <div className="rounded-2xl border bg-white p-5 text-slate-600 text-sm text-center">
-            Run a test to see your live preview here.
-          </div>
-        ) : (
-          <>
-            {/* Grade + sub-scores */}
-            <div className="grid lg:grid-cols-[1.1fr,0.9fr] gap-6">
-              <div className="rounded-2xl border bg-white p-5 md:p-6">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xl md:text-2xl font-semibold">
-                    Your Website’s Grade
-                  </h2>
-                  <GradeBadge score={overallScore} size="lg" />
+
+            <div className="mt-4 grid gap-3 text-sm text-slate-700">
+              <div className="rounded-xl border p-3">
+                <div className="text-xs text-slate-500">URL</div>
+                <div className="truncate">
+                  {data?.finalUrl || data?.url || "—"}
                 </div>
-                <div className="mt-4 h-3 rounded-full bg-slate-200 overflow-hidden">
+              </div>
+
+              <div className="rounded-xl border p-3">
+                <div className="font-medium mb-1">Meta</div>
+                <ul className="list-disc pl-5">
+                  <li>
+                    <b>Title:</b> {data?.meta?.title ?? "—"}
+                  </li>
+                  <li>
+                    <b>Description:</b>{" "}
+                    {data?.meta?.description
+                      ? `${data.meta.description.slice(0, 160)}${
+                          data.meta.description.length > 160 ? "…" : ""
+                        }`
+                      : "—"}
+                  </li>
+                  <li>
+                    <b>Canonical:</b> {data?.meta?.canonical ?? "—"}
+                  </li>
+                </ul>
+              </div>
+
+              <div className="rounded-xl border p-3">
+                <div className="font-medium mb-1">Headings</div>
+                <div>
+                  H1 / H2 / H3: {data?.seo?.h1Count ?? 0} /{" "}
+                  {data?.seo?.h2Count ?? 0} / {data?.seo?.h3Count ?? 0}
+                </div>
+              </div>
+
+              <div className="rounded-xl border p-3">
+                <div className="font-medium mb-1">Images & Links</div>
+                <div>
+                  Images: {data?.images?.total ?? 0} • Missing ALT:{" "}
+                  {data?.images?.missingAlt ?? 0}
+                </div>
+                <div>
+                  Links: {data?.links?.total ?? 0} • Internal:{" "}
+                  {data?.links?.internal ?? 0} • External:{" "}
+                  {data?.links?.external ?? 0}
+                </div>
+              </div>
+            </div>
+
+            {/* sub-scores */}
+            <div className="mt-6 grid md:grid-cols-2 gap-4">
+              <div className="rounded-2xl border bg-white p-5 md:p-6">
+                <div className="text-sm font-medium text-slate-700">
+                  Overall score
+                </div>
+                <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
                   <div
                     className="h-full bg-[#006D77]"
                     style={{ width: `${safePct(overallScore)}%` }}
                   />
                 </div>
-                <div className="mt-3 text-slate-700">
-                  <span className="text-xl font-semibold">
+                <div className="mt-1 text-sm text-slate-600">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-[#006D77]" />
                     {safePct(overallScore)} / 100
                   </span>
                   <span className="ml-3 text-slate-500">Grade (auto)</span>
@@ -916,33 +761,6 @@ export default function Landing({
                         H1 / H2 / H3: {data.seo?.h1Count ?? 0} /{" "}
                         {data.seo?.h2Count ?? 0} / {data.seo?.h3Count ?? 0}
                       </div>
-                    </div>
-                    <div className="rounded-xl border p-3">
-                      <div className="font-medium mb-1">Links</div>
-                      <div>
-                        Total: {data.links?.total ?? 0} · Internal:{" "}
-                        {data.links?.internal ?? 0} · External:{" "}
-                        {data.links?.external ?? 0}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border p-3">
-                      <div className="font-medium mb-1">Images</div>
-                      <div>
-                        Total: {data.images?.total ?? 0} · Missing ALT:{" "}
-                        {data.images?.missingAlt ?? 0}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border p-3 md:col-span-2">
-                      <div className="font-medium mb-1">Robots / Sitemap</div>
-                      <div>
-                        robots.txt:{" "}
-                        {data.robots?.robotsTxtOk ? "OK" : "Not found"} ·
-                        sitemap: {data.robots?.sitemapOk ? "OK" : "Not found"}
-                      </div>
-                    </div>
-                    <div className="text-xs text-slate-500 md:col-span-2">
-                      URL: {niceUrl} · HTTP: {data.httpStatus ?? "—"} · Lang:{" "}
-                      {data.meta?.lang ?? "—"}
                     </div>
                   </div>
                 )}
@@ -978,282 +796,214 @@ export default function Landing({
                     </div>
                   </div>
                 </div>
-                <div className="mt-4 text-sm text-slate-600">
-                  If you fix the top 5 issues we estimate ≈ <b>+18% leads</b>.
-                </div>
               </div>
             </div>
+          </div>
 
-            {/* ───── TABS ───── */}
-            <div className="mt-6">
-              <div className="flex gap-2 pl-2">
-                {[
-                  "Sections Present",
-                  "Quick Wins",
-                  "Prioritized Backlog",
-                  "Findings",
-                  "Content Audit",
-                  "Copy Suggestions",
-                ].map((t) => (
-                  <TabButton key={t} name={t} />
-                ))}
-              </div>
-
-              <div className="border border-t-0 rounded-b-xl bg-white p-4">
-                {/* Sections Present */}
-                {activeTab === "Sections Present" && (
-                  <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-                    {(derivedSections.length
-                      ? derivedSections
-                      : [
-                          { title: "hero", ok: true },
-                          { title: "social proof", ok: false },
-                          { title: "features", ok: false },
-                          { title: "contact", ok: false },
-                          { title: "value prop", ok: false },
-                          { title: "pricing", ok: false },
-                          { title: "faq", ok: false },
-                          { title: "footer", ok: false },
-                        ]
-                    ).map((s, i) => (
-                      <div key={i} className="rounded-lg border px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={
-                              "h-2 w-2 rounded-full " +
-                              (s.ok ? "bg-emerald-500" : "bg-rose-500")
-                            }
-                          />
-                          <span className="text-sm font-medium">{s.title}</span>
-                        </div>
-                        {s.why && (
-                          <div className="mt-1 text-xs text-slate-500">
-                            {s.why}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Quick Wins → Esošais vs Ieteicamais + Lift */}
-                {activeTab === "Quick Wins" && (
-                  <div className="overflow-x-auto">
-                    <table className="w-full border text-sm">
-                      <thead>
-                        <tr className="bg-slate-50">
-                          <th className="p-2 border text-left">Lauks</th>
-                          <th className="p-2 border text-left">Esošais</th>
-                          <th className="p-2 border text-left">Ieteicamais</th>
-                          <th className="p-2 border text-left">
-                            Potenciālais ieguvums
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(quickWinsRows.length
-                          ? quickWinsRows
-                          : [
-                              {
-                                field: "Hero text",
-                                current: "—",
-                                suggested: "Add a clear value headline.",
-                                lift: 8,
-                              },
-                              {
-                                field: "Meta description",
-                                current: "Nav atrasts",
-                                suggested:
-                                  "Pievienot ~150 rakstzīmju aprakstu ar vērtības solījumu.",
-                                lift: 4,
-                              },
-                              {
-                                field: "Image ALT texts",
-                                current: "Trūkst ALT vairākos attēlos",
-                                suggested:
-                                  "Pievienot ALT tekstus visiem nedekoratīviem attēliem.",
-                                lift: 3,
-                              },
-                            ]
-                        ).map((r, i) => (
-                          <tr key={i}>
-                            <td className="p-2 border align-top">{r.field}</td>
-                            <td className="p-2 border align-top">
-                              {r.current}
-                            </td>
-                            <td className="p-2 border align-top">
-                              {r.suggested}
-                            </td>
-                            <td className="p-2 border align-top">
-                              ≈ +{Math.max(0, r.lift)}% leads
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {/* Prioritized Backlog → Esošais vs Ieteicamais + Priority/Effort + Lift */}
-                {activeTab === "Prioritized Backlog" && (
-                  <div className="overflow-x-auto">
-                    <table className="w-full border text-sm">
-                      <thead>
-                        <tr className="bg-slate-50">
-                          <th className="p-2 border text-left">Uzdevums</th>
-                          <th className="p-2 border text-left">Esošais</th>
-                          <th className="p-2 border text-left">Ieteicamais</th>
-                          <th className="p-2 border text-left">Prioritāte</th>
-                          <th className="p-2 border text-left">Effort</th>
-                          <th className="p-2 border text-left">
-                            Potenciālais ieguvums
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(backlogRows.length
-                          ? backlogRows
-                          : ([
-                              {
-                                task: "Canonical",
-                                current: "Nav",
-                                suggested: "Pievienot kanonisko URL",
-                                priority: "med",
-                                effort: "1h",
-                                lift: 1,
-                              },
-                              {
-                                task: "Sitemap",
-                                current: "Nav",
-                                suggested:
-                                  "Publicēt /sitemap.xml un norādīt robots.txt",
-                                priority: "med",
-                                effort: "1–2h",
-                                lift: 1,
-                              },
-                              {
-                                task: "ALT teksti",
-                                current: "Trūkst daudzviet",
-                                suggested: "Pievienot ALT visiem attēliem",
-                                priority: "med",
-                                effort: "2–4h",
-                                lift: 3,
-                              },
-                            ] as any)
-                        ).map((r: any, i: number) => (
-                          <tr key={i}>
-                            <td className="p-2 border align-top">{r.task}</td>
-                            <td className="p-2 border align-top">
-                              {r.current}
-                            </td>
-                            <td className="p-2 border align-top">
-                              {r.suggested}
-                            </td>
-                            <td className="p-2 border align-top">
-                              <span
-                                className={
-                                  r.priority === "high"
-                                    ? "text-rose-600"
-                                    : r.priority === "med"
-                                    ? "text-amber-600"
-                                    : "text-emerald-600"
-                                }
-                              >
-                                {r.priority}
-                              </span>
-                            </td>
-                            <td className="p-2 border align-top">{r.effort}</td>
-                            <td className="p-2 border align-top">
-                              ≈ +{Math.max(0, r.lift)}% leads
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {/* Pārējie tab paliek blur */}
-                {BLUR_TABS.has(activeTab) && (
-                  <BlurPanel>
-                    <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
-                      {activeTab}
-                    </div>
-                  </BlurPanel>
-                )}
-              </div>
-            </div>
-
-            {/* CTA */}
-            <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
-              <div>
-                <h3 className="text-xl md:text-2xl font-semibold">
-                  Get a Free Scorecard for Your Website.
-                </h3>
-                <p className="mt-2 text-slate-600">
-                  Download a report with your website’s top 3 weaknesses and a
-                  few quick fixes. No credit card, no spam.
-                </p>
-              </div>
-              <form
-                className="flex w-full flex-col sm:flex-row gap-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                }}
-              >
-                <input
-                  placeholder="Enter your email"
-                  className="flex-1 rounded-xl px-4 py-3 bg-slate-50 border outline-none focus:ring-2 focus:ring-[#83C5BE]"
-                />
+          {/* right: tabs */}
+          <div className="rounded-2xl border bg-white p-5 md:p-6">
+            {/* tabs header */}
+            <div className="flex gap-2 flex-wrap">
+              {[
+                "Sections Present",
+                "Quick Wins",
+                "Prioritized Backlog",
+                "Findings",
+                "Content Audit",
+                "Copy Suggestions",
+              ].map((t) => (
                 <button
-                  type="submit"
-                  className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
+                  key={t}
+                  onClick={() => setActiveTab(t as any)}
+                  className={`px-3 py-1.5 rounded-full text-sm border ${
+                    activeTab === t ? "bg-slate-900 text-white" : "bg-white"
+                  }`}
                 >
-                  Get My Free Scorecard
+                  {t}
                 </button>
-              </form>
+              ))}
             </div>
-          </>
-        )}
-      </section>
 
-      {/* FEATURES */}
-      <div id="features">
-        <Features onPrimaryClick={handleRun} />
-      </div>
+            {/* tabs body */}
+            <div className="mt-4">
+              {/* Sections Present */}
+              {activeTab === "Sections Present" && (
+                <div className="grid gap-2">
+                  {(derivedSections.length
+                    ? derivedSections
+                    : [
+                        { title: "hero", ok: true, why: "placeholder" },
+                        { title: "value prop", ok: true },
+                        { title: "social proof", ok: false },
+                        { title: "pricing", ok: false },
+                        { title: "features", ok: true },
+                        { title: "faq", ok: false },
+                        { title: "contact", ok: true },
+                        { title: "footer", ok: true },
+                      ]
+                  ).map((s, i) => (
+                    <div key={i} className="rounded-lg border px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={
+                            "h-2 w-2 rounded-full " +
+                            (s.ok ? "bg-emerald-500" : "bg-rose-500")
+                          }
+                        />
+                        <span className="text-sm font-medium">{s.title}</span>
+                      </div>
+                      {s.why && (
+                        <div className="mt-1 text-xs text-slate-500">
+                          {s.why}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
-      {/* FULL REPORT */}
-      <section className="mx-auto max-w-[1200px] px-4 py-12">
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-2 gap-6 items-center">
+              {/* Quick Wins → Esošais vs Ieteicamais */}
+              {activeTab === "Quick Wins" && (
+                <div className="overflow-x-auto">
+                  <table className="w-full border text-sm">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="p-2 border text-left">Lauks</th>
+                        <th className="p-2 border text-left">Esošais</th>
+                        <th className="p-2 border text-left">Ieteicamais</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(quickWinsRows.length
+                        ? quickWinsRows
+                        : [
+                            {
+                              field: "Meta description",
+                              current: "—",
+                              suggested:
+                                "145–160 rakstzīmes ar ieguvumu + zīmolu.",
+                            },
+                            {
+                              field: "ALT text",
+                              current: "—",
+                              suggested:
+                                "Īss, aprakstošs ALT nedekoratīviem attēliem.",
+                            },
+                          ]
+                      ).map((r, i) => (
+                        <tr key={i}>
+                          <td className="p-2 border align-top">{r.field}</td>
+                          <td className="p-2 border align-top">
+                            <div className="whitespace-pre-wrap break-words">
+                              {r.current || "—"}
+                            </div>
+                          </td>
+                          <td className="p-2 border align-top">
+                            <div className="whitespace-pre-wrap break-words">
+                              {r.suggested || "—"}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Prioritized Backlog → Esošais vs Ieteicamais + Priority/Effort */}
+              {activeTab === "Prioritized Backlog" && (
+                <div className="overflow-x-auto">
+                  <table className="w-full border text-sm">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="p-2 border text-left">Uzdevums</th>
+                        <th className="p-2 border text-left">Esošais</th>
+                        <th className="p-2 border text-left">Ieteicamais</th>
+                        <th className="p-2 border text-left">Prioritāte</th>
+                        <th className="p-2 border text-left">Effort</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(backlogRows.length
+                        ? backlogRows
+                        : ([
+                            {
+                              task: "Canonical",
+                              current: "Nav",
+                              suggested: "Pievienot kanonisko URL",
+                              priority: "med",
+                              effort: "1h",
+                            },
+                          ] as any[])
+                      ).map((r: any, i: number) => (
+                        <tr key={i}>
+                          <td className="p-2 border align-top">{r.task}</td>
+                          <td className="p-2 border align-top">
+                            <div className="whitespace-pre-wrap break-words">
+                              {r.current || "—"}
+                            </div>
+                          </td>
+                          <td className="p-2 border align-top">
+                            <div className="whitespace-pre-wrap break-words">
+                              {r.suggested || "—"}
+                            </div>
+                          </td>
+                          <td className="p-2 border align-top">
+                            <span className="inline-flex px-2 py-0.5 rounded bg-slate-100 capitalize">
+                              {r.priority}
+                            </span>
+                          </td>
+                          <td className="p-2 border align-top">{r.effort}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Pārējie tab paliek blur */}
+              {BLUR_TABS.has(activeTab) && (
+                <BlurPanel>
+                  <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
+                    {activeTab}
+                  </div>
+                </BlurPanel>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* CTA */}
+        <div className="mt-10 rounded-3xl border bg-white p-5 md:p-8 grid md:grid-cols-[1fr,0.9fr] gap-6 items-center">
           <div>
-            <h3 className="text-2xl md:text-3xl font-semibold">
-              Full AI Report in 1–2 Minutes — Just $50
+            <h3 className="text-xl md:text-2xl font-semibold">
+              Get a Free Scorecard for Your Website.
             </h3>
-            <ul className="mt-4 space-y-2 text-slate-700 text-sm md:text-base">
+            <p className="mt-2 text-slate-600">
+              Download a report with your website’s top 3 weaknesses and a 7-day
+              action plan to fix them. Hand it directly to your team or
+              freelancer.
+            </p>
+            <ul className="mt-4 text-sm text-slate-700 space-y-1">
+              <li>• Instant snapshot of your page</li>
+              <li>• Actionable tasks with priority and effort</li>
               <li>
-                • A Complete Check-up: We review over 40 critical points in UX,
-                SEO, CRO, and performance.
-              </li>
-              <li>• Full annotated screenshots</li>
-              <li>
-                • Actionable To-Do List: A prioritized list of fixes you can
-                hand directly to your team or freelancer.
+                • Shareable link — send it to your{" "}
+                <span className="underline">Slack</span> or{" "}
+                <span className="underline">Trello</span> board, or hand
+                directly to your team or freelancer.
               </li>
               <li>• PDF + online report (shareable link)</li>
             </ul>
             <div className="mt-6 flex gap-3">
               <button
-                onClick={() =>
-                  onOrderFull
-                    ? onOrderFull(resolvedAuditUrl)
-                    : orderFullInternal()
-                }
+                onClick={onOrderFull ?? orderFullInternal}
                 className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
               >
                 Order Full Audit
               </button>
               <button
-                onClick={seeSampleInternal}
+                onClick={onSeeSample ?? seeSampleInternal}
                 className="rounded-xl px-5 py-3 border font-medium hover:bg-slate-50"
               >
                 See Sample Report
@@ -1271,18 +1021,16 @@ export default function Landing({
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
                 { title: "100+ Checkpoints", icon: "🔎" },
-                { title: "Potential +20% Lift", icon: "📈" },
-                { title: "Report in 1–2 Minutes", icon: "⏱️" },
-                { title: "Trusted by 10,000+ Audits", icon: "🛡️" },
-              ].map((b, i) => (
+                { title: "Action Plan", icon: "🧭" },
+                { title: "PDF + Link", icon: "🔗" },
+                { title: "No Login", icon: "⚡" },
+              ].map((x) => (
                 <div
-                  key={i}
-                  className="rounded-2xl border px-3 py-4 text-center"
+                  key={x.title}
+                  className="rounded-xl border bg-white p-3 grid place-items-center gap-2"
                 >
-                  <div className="text-2xl md:text-3xl">{b.icon}</div>
-                  <div className="mt-2 text-xs md:text-sm text-slate-700 leading-snug">
-                    {b.title}
-                  </div>
+                  <div className="text-2xl">{x.icon}</div>
+                  <div className="text-xs text-slate-600">{x.title}</div>
                 </div>
               ))}
             </div>
@@ -1290,92 +1038,26 @@ export default function Landing({
         </div>
       </section>
 
-      {/* COUNTERS */}
-      <Counters />
+      {/* features */}
+      <section id="features" className="mx-auto max-w-[1200px] px-4 py-12">
+        <Features />
+      </section>
 
-      {/* Case study */}
-      <section className="mx-auto max-w-[1200px] px-4 py-14">
-        <div className="rounded-3xl border bg-white p-5 md:p-10 grid md:grid-cols-3 gap-6 items-center">
-          <div className="md:col-span-2">
-            <h3 className="text-2xl font-semibold">
-              How Holbox AI Gave This Business Owner Confidence in Their
-              Agency's Work.
-            </h3>
-            <p className="mt-2 text-slate-600">
-              Before: CTA below the fold, slow load times. After: CTA above the
-              fold, load time &lt; 2.0s. Result: more sign-ups and lower CPA.
-            </p>
-            <blockquote className="mt-4 rounded-xl bg-slate-50 p-4 text-slate-700 text-sm">
-              “I used to worry if I was wasting money, but the Holbox AI report
-              gave me a clear list of improvements to request. Now I know I'm
-              getting a great return.”
-            </blockquote>
-          </div>
-          <div className="rounded-2xl border overflow-hidden">
-            <img
-              src="/before-after.png"
-              alt="Before / After chart"
-              className="w-full h-auto"
-              loading="lazy"
-            />
-          </div>
+      {/* counters */}
+      <section className="bg-white">
+        <div className="mx-auto max-w-[1200px] px-4 py-10">
+          <Counters />
         </div>
       </section>
 
-      {/* FAQ + CTA */}
-      <section id="faq" className="mx-auto max-w-[1200px] px-4 py-14">
-        <h3 className="text-2xl font-semibold">FAQ</h3>
-        <div className="mt-6 grid md:grid-cols-2 gap-6">
-          {[
-            [
-              "Does AI make mistakes?",
-              "The analysis is based on standards and heuristics; a human review is still possible.",
-            ],
-            [
-              "Do you need server access?",
-              "No, the audit runs on publicly available content only.",
-            ],
-            [
-              "Are my data secure?",
-              "Reports are deleted after 14 days unless permanent access is purchased.",
-            ],
-            [
-              "Which pages are scanned?",
-              "Key pages like home, product/service, and forms/checkout (configurable).",
-            ],
-            [
-              "Can I use this to evaluate the work of my marketing team or agency?",
-              "Yes. Many of our customers use Holbox AI to get an unbiased report on a new website or landing page. It's the fastest way to get a second opinion and ensure you're getting a great return.",
-            ],
-          ].map((qa, i) => (
-            <div key={i} className="rounded-2xl border bg-white p-5">
-              <div className="font-medium">{qa[0]}</div>
-              <p className="mt-1 text-slate-600 text-sm">{qa[1]}</p>
-            </div>
-          ))}
-        </div>
-        <div className="mt-6">
-          <button
-            onClick={handleRun}
-            className="rounded-xl px-5 py-3 bg-[#006D77] text-white font-medium hover:opacity-90"
-          >
-            Still have questions? Get a Free Scorecard
-          </button>
-        </div>
-      </section>
-
-      {/* CONTACT */}
-      <div id="contact">
+      {/* contact */}
+      <section id="contact" className="mx-auto max-w-[1200px] px-4 py-12">
         <ContactForm />
-      </div>
+      </section>
 
-      {/* FOOTER */}
-      <footer className="border-t">
-        <div className="mx-auto max-w-[1200px] px-4 py-8 flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-slate-600">
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-[#006D77]" />
-            <span>Holbox AI</span>
-          </div>
+      {/* footer */}
+      <footer className="bg-white border-t">
+        <div className="mx-auto max-w-[1200px] px-4 py-8 grid gap-4 text-sm text-slate-600">
           <div className="flex gap-6">
             <a href="#">Pricing</a>
             <a href="#faq">FAQ</a>
@@ -1386,6 +1068,21 @@ export default function Landing({
           <div>Made with ❤️ in Latvia • © {new Date().getFullYear()}</div>
         </div>
       </footer>
+    </div>
+  );
+}
+
+/* ───────────────────────────── helpers: blur overlay ─────────────────────── */
+function BlurPanel({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="relative">
+      <div className="absolute inset-0 backdrop-blur-sm bg-white/50 rounded-xl pointer-events-none" />
+      <div className="relative">{children}</div>
+      <div className="absolute inset-0 grid place-items-center">
+        <div className="inline-flex items-center gap-2 rounded-full bg-white border px-3 py-1 text-xs shadow">
+          Unlock in Full Report
+        </div>
+      </div>
     </div>
   );
 }
