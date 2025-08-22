@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optional global tweaks */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  @apply bg-[#EDF6F9] text-slate-900;
+}
