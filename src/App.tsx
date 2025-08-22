@@ -60,3 +60,5 @@ export default function App() {
     />
   );
 }
+// piemērs:
+<Route path="/full" element={<FullReportView />} />;
