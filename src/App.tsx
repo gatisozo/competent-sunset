@@ -1,25 +1,25 @@
 // src/App.tsx
 import React from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-
 import Landing from "./Landing";
 import FullReportView from "./components/FullReportView";
 
-function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        {/* Free report (galvenā lapa) */}
-        <Route path="/" element={<Landing />} />
-
-        {/* Full report */}
-        <Route path="/full" element={<FullReportView />} />
-
-        {/* Fallback uz / */}
-        <Route path="*" element={<Landing />} />
-      </Routes>
-    </BrowserRouter>
-  );
+/**
+ * Neliela helper-funkcija, lai bez react-router pārslēgtos
+ * starp lapām pēc URL ceļa.
+ */
+function getPathname() {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname || "/";
 }
 
-export default App;
+export default function App() {
+  const path = getPathname();
+
+  // Viss, kas sākas ar /full → Full report
+  if (path.startsWith("/full")) {
+    return <FullReportView />;
+  }
+
+  // Pretējā gadījumā → Landing (Free report)
+  return <Landing />;
+}
