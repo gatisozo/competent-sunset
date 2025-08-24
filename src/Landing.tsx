@@ -6,6 +6,40 @@ import Counters from "./components/Counters";
 import ContactForm from "./components/ContactForm";
 import { runAnalyze } from "./lib/analyzeClient";
 
+/* ---------- helpers ---------- */
+function normalizeUrl(input: string): string {
+  let s = (input || "").trim();
+  if (!s) return s;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return s;
+  }
+}
+function clamp(n: number, lo = 0, hi = 100) {
+  return Math.max(lo, Math.min(hi, n));
+}
+function letterFromScore(n: number) {
+  if (n >= 90) return "A";
+  if (n >= 80) return "B";
+  if (n >= 70) return "C";
+  if (n >= 60) return "D";
+  return "E";
+}
+function buildScreenshotUrl(target: string) {
+  const url = /^https?:\/\//i.test(target) ? target : `https://${target}`;
+  const tmpl =
+    (import.meta as any).env?.VITE_SCREENSHOT_URL_TMPL ||
+    (typeof process !== "undefined" &&
+      (process as any).env?.VITE_SCREENSHOT_URL_TMPL);
+  if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
+  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
+}
+
+/* ---------- datu formas (minimālais kopums, ko rāda Free) ---------- */
 type AnalyzeData = {
   finalUrl?: string;
   url?: string;
@@ -23,28 +57,8 @@ type AnalyzeData = {
   headingsOutline?: Array<{ tag: string; text: string }>;
 };
 
-const BLUR_TABS = new Set(["Findings", "Content Audit", "Copy Suggestions"]);
-
-function normalizeUrl(input: string): string {
-  let s = (input || "").trim();
-  if (!s) return s;
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
-  try {
-    const u = new URL(s);
-    u.hash = "";
-    return u.toString();
-  } catch {
-    return s;
-  }
-}
-
-function safePct(n?: number) {
-  if (typeof n === "number" && isFinite(n))
-    return Math.max(0, Math.min(100, n));
-  return 0;
-}
-
 export default function Landing() {
+  /* state */
   const [url, setUrl] = useState("");
   const [data, setData] = useState<AnalyzeData | null>(null);
   const [progress, setProgress] = useState(0);
@@ -52,14 +66,14 @@ export default function Landing() {
   const [err, setErr] = useState<string | null>(null);
   const [lastUrl, setLastUrl] = useState("");
 
-  const [overall, setOverall] = useState(0);
-  const [structure, setStructure] = useState(0);
-  const [content, setContent] = useState(0);
+  const [overall, setOverall] = useState(73); // sākuma sample vērtība (kā ekrānā)
+  const [structure, setStructure] = useState(60);
+  const [content, setContent] = useState(43);
 
   const previewRef = useRef<HTMLDivElement | null>(null);
 
+  /* vienkāršots “score” kalkulators pietuvināts tavam vizuālajam */
   function computeScores(d: AnalyzeData) {
-    // vienkāršots skaitītājs, kas atbilst pašreizējam vizuālajam blokam
     let overall = 30;
     let structure = 30;
     let content = 30;
@@ -75,16 +89,20 @@ export default function Landing() {
     if (imgs > 0)
       content += Math.round(10 * ((imgs - (miss || 0)) / Math.max(1, imgs)));
 
+    overall = Math.round((structure * 0.55 + content * 0.45) / 1);
+    overall = clamp(overall);
+
     return {
-      overall: Math.max(0, Math.min(100, Math.round(overall))),
-      structure: Math.max(0, Math.min(100, Math.round(structure))),
-      content: Math.max(0, Math.min(100, Math.round(content))),
+      overall: clamp(overall),
+      structure: clamp(structure),
+      content: clamp(content),
     };
   }
 
-  const derivedSections = useMemo(() => {
+  /* atvasinām “Sections Present” no headingu un meta */
+  const sectionsPresent = useMemo(() => {
     const d = data;
-    if (!d) return [] as { title: string; ok: boolean; why?: string }[];
+    if (!d) return [] as { title: string; ok: boolean }[];
     const ho = d.headingsOutline || [];
     const text = [
       d.meta?.title || "",
@@ -97,63 +115,46 @@ export default function Landing() {
     const has = (re: RegExp) => re.test(text);
 
     return [
-      {
-        title: "hero",
-        ok: (d.seo?.h1Count ?? 0) > 0,
-        why: (d.seo?.h1Count ?? 0) > 0 ? "Found H1/meta title" : "No H1",
-      },
-      {
-        title: "social proof",
-        ok: has(/testimonial|review|trust|logo/),
-        why: has(/testimonial|review|trust|logo/)
-          ? "Headings mention social proof"
-          : "Not detected",
-      },
-      {
-        title: "features",
-        ok: has(/feature|benefit|capabilit/),
-        why: has(/feature|benefit|capabilit/)
-          ? "Features mentions"
-          : "No features headings",
-      },
-      {
-        title: "contact",
-        ok: has(/contact|support|email|phone/),
-        why: has(/contact|support|email|phone/)
-          ? "Contact hints"
-          : "No contact heading",
-      },
-      {
-        title: "value prop",
-        ok: (d.meta?.description || "").length >= 120,
-        why:
-          (d.meta?.description || "").length >= 120
-            ? "Meta description present"
-            : "Weak value statement",
-      },
-      {
-        title: "pricing",
-        ok: has(/price|pricing|plan/),
-        why: has(/price|pricing|plan/) ? "Pricing hints" : "No pricing section",
-      },
-      {
-        title: "faq",
-        ok: has(/faq|frequently asked|question/),
-        why: has(/faq|frequently asked|question/)
-          ? "FAQ mentions"
-          : "No FAQ heading",
-      },
-      {
-        title: "footer",
-        ok: (d.links?.total ?? 0) > 10,
-        why:
-          (d.links?.total ?? 0) > 10
-            ? "Footer links likely"
-            : "Footer not detected",
-      },
+      { title: "Hero", ok: (d.seo?.h1Count ?? 0) > 0 },
+      { title: "Social Proof", ok: has(/testimonial|review|trust|logo/) },
+      { title: "Features", ok: has(/feature|benefit|capabilit/) },
+      { title: "Contact", ok: has(/contact|support|email|phone/) },
+      { title: "Value Prop", ok: (d.meta?.description || "").length >= 120 },
+      { title: "Pricing", ok: has(/price|pricing|plan/) },
+      { title: "Faq", ok: has(/faq|frequently asked|question/) },
+      { title: "Footer", ok: (d.links?.total ?? 0) > 10 },
     ];
   }, [data]);
 
+  const quickWins = useMemo(() => {
+    const wins: string[] = [];
+    if (!data) return wins;
+    if (!data.seo?.metaDescriptionPresent)
+      wins.push("Fix meta description to ~150 chars with benefits.");
+    const imgs = data.images?.total ?? 0;
+    const miss = data.images?.missingAlt ?? 0;
+    if (imgs && miss) wins.push("Add ALT text to images.");
+    if (!data.seo?.canonicalPresent) wins.push("Add canonical URL.");
+    if (wins.length === 0) wins.push("Tweak headings for clarity.");
+    return wins.slice(0, 4);
+  }, [data]);
+
+  const prioritizedBacklog = useMemo(() => {
+    const items = [
+      { title: "Re-write Hero Section Copy", lift: "+20% leads" },
+      { title: "Integrate Testimonials", lift: "+10% leads" },
+      { title: "Enhance FAQ Section", lift: "+10% leads" },
+    ];
+    return items;
+  }, []);
+
+  /* Hero snapshot (Overview tab kreisā puse) */
+  const heroSrc = useMemo(() => {
+    const u = data?.finalUrl || data?.url || lastUrl || url || "";
+    return u ? buildScreenshotUrl(u) : undefined;
+  }, [data, lastUrl, url]);
+
+  /* run */
   async function onRun() {
     if (!url.trim()) return;
     setErr(null);
@@ -172,7 +173,7 @@ export default function Landing() {
     setProgress(70);
     const d = (res as any).data as AnalyzeData;
     setData(d);
-    setLastUrl(d.finalUrl || d.url || url);
+    setLastUrl(d.finalUrl || d.url || normalizeUrl(url));
 
     const sc = computeScores(d);
     setOverall(sc.overall);
@@ -182,33 +183,36 @@ export default function Landing() {
     setProgress(100);
     setLoading(false);
 
-    setTimeout(() => {
-      previewRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }, 120);
+    requestAnimationFrame(() =>
+      previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+    );
   }
 
   const orderFull = () => {
-    const u = lastUrl || (url.trim() ? normalizeUrl(url) : "");
+    const u =
+      data?.finalUrl ||
+      data?.url ||
+      lastUrl ||
+      (url.trim() ? normalizeUrl(url) : "");
     const href = `/full?autostart=1${u ? `&url=${encodeURIComponent(u)}` : ""}`;
     window.location.href = href;
   };
 
-  // UI — atbilstoši tavām kartēm un tabiem (kā ekrānšāviņā)
-  const [activeTab, setActiveTab] = useState<
+  /* Tabs (kā tavā ekrānā) */
+  type Tab =
+    | "Overall"
     | "Sections Present"
     | "Quick Wins"
     | "Prioritized Backlog"
     | "Findings"
     | "Content Audit"
-    | "Copy Suggestions"
-  >("Sections Present");
+    | "Copy Suggestions";
+  const [tab, setTab] = useState<Tab>("Overall");
 
+  /* UI */
   return (
     <div className="min-h-screen bg-[#EDF6F9] text-slate-900">
-      {/* Hero top (saīsināts — tavs dizains) */}
+      {/* Header */}
       <header className="sticky top-0 z-30 backdrop-blur supports-[backdrop-filter]:bg-white/60 bg-white/80 border-b">
         <div className="mx-auto max-w-[1200px] px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -239,13 +243,13 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* HERO section ar ievadi */}
-      <section className="relative overflow-hidden">
+      {/* Hero */}
+      <section className="relative">
         <div className="absolute inset-0 bg-gradient-to-b from-[#006D77] via-[#83C5BE] to-[#EDF6F9]" />
         <div className="relative mx-auto max-w-[1200px] grid md:grid-cols-2 gap-6 px-4 py-10 md:py-14 text-white">
           <div>
             <h1 className="text-3xl md:text-5xl font-semibold tracking-tight mt-4">
-              Your Website.
+              Get a Second Opinion on Your Website.
             </h1>
             <p className="mt-3 text-white/90">
               The AI tool that instantly grades your landing pages and gives you
@@ -257,9 +261,7 @@ export default function Landing() {
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="menopauze.lv"
                 className="flex-1 rounded-xl px-4 py-3 text-slate-900 bg-white outline-none ring-0 focus:ring-2 focus:ring-white/60"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && url.trim()) onRun();
-                }}
+                onKeyDown={(e) => e.key === "Enter" && url.trim() && onRun()}
               />
               <button
                 onClick={onRun}
@@ -302,7 +304,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* PREVIEW / RESULTS */}
+      {/* Preview / Results */}
       <section
         id="preview"
         ref={previewRef}
@@ -324,25 +326,35 @@ export default function Landing() {
           </div>
         )}
 
+        {/* augšējie 2 paneļi */}
         <div className="grid md:grid-cols-[1.1fr,0.9fr] gap-6">
-          {/* kreisā kolonna */}
-          <div className="rounded-2xl border bg-white p-5 md:p-6">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-700">
-                Your Website’s Grade
-              </div>
-              <GradeBadge score={safePct(overall)} />
-            </div>
-
-            <div className="mt-4 grid gap-3 text-sm text-slate-700">
-              <div className="rounded-xl border p-3">
-                <div className="text-xs text-slate-500">URL</div>
-                <div className="truncate">
-                  {data?.finalUrl || data?.url || "—"}
+          {/* kreisā: Grade */}
+          <div className="rounded-2xl border bg-white p-5">
+            <div className="flex items-start gap-4">
+              <div className="flex-1">
+                <div className="text-sm font-medium text-slate-700">
+                  Your Website’s Grade
+                </div>
+                <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className="h-full bg-[#006D77]"
+                    style={{ width: `${clamp(overall)}%` }}
+                  />
+                </div>
+                <div className="mt-2 text-sm">
+                  {clamp(overall)} / 100{" "}
+                  <span className="text-slate-500">Grade (auto)</span>
                 </div>
               </div>
+              <div className="shrink-0">
+                <GradeBadge score={clamp(overall)} />
+              </div>
+            </div>
+
+            {/* meta info kastītes */}
+            <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm text-slate-700">
               <div className="rounded-xl border p-3">
-                <div className="font-medium mb-1">Meta</div>
+                <div className="text-xs text-slate-500">Meta</div>
                 <ul className="list-disc pl-5">
                   <li>
                     <b>Title:</b> {data?.meta?.title ?? "—"}
@@ -351,7 +363,7 @@ export default function Landing() {
                     <b>Description:</b>{" "}
                     {data?.meta?.description
                       ? `${data.meta.description.slice(0, 160)}${
-                          data.meta.description.length > 160 ? "…" : ""
+                          (data.meta.description || "").length > 160 ? "…" : ""
                         }`
                       : "—"}
                   </li>
@@ -361,192 +373,293 @@ export default function Landing() {
                 </ul>
               </div>
               <div className="rounded-xl border p-3">
-                <div className="font-medium mb-1">Headings</div>
+                <div className="text-xs text-slate-500">Headings</div>
                 <div>
                   H1 / H2 / H3: {data?.seo?.h1Count ?? 0} /{" "}
                   {data?.seo?.h2Count ?? 0} / {data?.seo?.h3Count ?? 0}
                 </div>
               </div>
               <div className="rounded-xl border p-3">
-                <div className="font-medium mb-1">Images & Links</div>
+                <div className="text-xs text-slate-500">Links</div>
                 <div>
-                  Images: {data?.images?.total ?? 0} • Missing ALT:{" "}
-                  {data?.images?.missingAlt ?? 0}
-                </div>
-                <div>
-                  Links: {data?.links?.total ?? 0} • Internal:{" "}
+                  Total: {data?.links?.total ?? 0} • Internal:{" "}
                   {data?.links?.internal ?? 0} • External:{" "}
                   {data?.links?.external ?? 0}
                 </div>
               </div>
               <div className="rounded-xl border p-3">
-                <div className="font-medium mb-1">Robots / Sitemap</div>
+                <div className="text-xs text-slate-500">Images</div>
+                <div>
+                  Total: {data?.images?.total ?? 0} • Missing ALT:{" "}
+                  {data?.images?.missingAlt ?? 0}
+                </div>
+              </div>
+              <div className="rounded-xl border p-3">
+                <div className="text-xs text-slate-500">Robots / Sitemap</div>
                 <div>
                   robots.txt: {data?.robots?.robotsTxtOk ? "OK" : "—"} •
                   sitemap: {data?.robots?.sitemapOk ? "OK" : "—"}
                 </div>
               </div>
-            </div>
-
-            <div className="mt-6 grid md:grid-cols-2 gap-4">
-              <div className="rounded-2xl border bg-white p-5 md:p-6">
-                <div className="text-sm font-medium text-slate-700">
-                  Overall score
-                </div>
-                <div className="mt-3 h-3 rounded-full bg-slate-200 overflow-hidden">
-                  <div
-                    className="h-full bg-[#006D77]"
-                    style={{ width: `${safePct(overall)}%` }}
-                  />
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  {safePct(overall)} / 100
-                </div>
-              </div>
-              <div className="rounded-2xl border bg-white p-5 md:p-6">
-                <div className="text-sm font-medium text-slate-700">
-                  Sub-scores
-                </div>
-                <div className="grid grid-cols-1 gap-4 mt-3">
-                  <div>
-                    <div className="text-sm text-slate-600">Structure</div>
-                    <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                      <div
-                        className="h-full bg-[#99D6D0]"
-                        style={{ width: `${safePct(structure)}%` }}
-                      />
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {safePct(structure)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-slate-600">Content</div>
-                    <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                      <div
-                        className="h-full bg-[#006D77]"
-                        style={{ width: `${safePct(content)}%` }}
-                      />
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {safePct(content)}%
-                    </div>
-                  </div>
+              <div className="rounded-xl border p-3">
+                <div className="text-xs text-slate-500">URL</div>
+                <div className="truncate">
+                  {data?.finalUrl || data?.url || "—"}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* labā kolonna — Tabs */}
-          <div className="rounded-2xl border bg-white p-5 md:p-6">
-            <div className="flex gap-2 flex-wrap">
-              {[
-                "Sections Present",
-                "Quick Wins",
-                "Prioritized Backlog",
-                "Findings",
-                "Content Audit",
-                "Copy Suggestions",
-              ].map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setActiveTab(t as any)}
-                  className={`px-3 py-1.5 rounded-full text-sm border ${
-                    activeTab === t ? "bg-slate-900 text-white" : "bg-white"
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
+          {/* labā: Sub-scores */}
+          <div className="rounded-2xl border bg-white p-5">
+            <div className="text-sm font-medium text-slate-700">Sub-scores</div>
+            <div className="mt-4 text-sm">
+              <div>Structure</div>
+              <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full bg-[#99D6D0]"
+                  style={{ width: `${clamp(structure)}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {clamp(structure)}%
+              </div>
             </div>
-
-            <div className="mt-4">
-              {activeTab === "Sections Present" && (
-                <div className="grid md:grid-cols-2 gap-2">
-                  {(derivedSections.length ? derivedSections : []).map(
-                    (s, i) => (
-                      <div key={i} className="rounded-lg border px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`h-2 w-2 rounded-full ${
-                              s.ok ? "bg-emerald-500" : "bg-rose-500"
-                            }`}
-                          />
-                          <span className="text-sm font-medium">{s.title}</span>
-                        </div>
-                        {s.why && (
-                          <div className="mt-1 text-xs text-slate-500">
-                            {s.why}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-
-              {activeTab === "Quick Wins" && (
-                <div className="rounded-lg border p-3 text-slate-700">
-                  <div className="text-sm text-slate-500 mb-2">
-                    Top 3 fixes for a quick lift
-                  </div>
-                  <ul className="list-disc pl-5 space-y-1">
-                    <li>
-                      Fix meta description to ~150 chars with benefit + brand.
-                    </li>
-                    <li>Add ALT text to non-decorative images.</li>
-                    <li>Ensure canonical URL is present and correct.</li>
-                  </ul>
-                </div>
-              )}
-
-              {activeTab === "Prioritized Backlog" && (
-                <div className="rounded-lg border p-3">
-                  <div className="text-sm text-slate-500 mb-2">
-                    High-impact tasks
-                  </div>
-                  <ul className="space-y-2">
-                    <li className="rounded border px-3 py-2">
-                      Revamp hero (strong H1 + CTA)
-                    </li>
-                    <li className="rounded border px-3 py-2">
-                      Improve internal linking (5–10 links)
-                    </li>
-                    <li className="rounded border px-3 py-2">
-                      Add/testimonial slider
-                    </li>
-                  </ul>
-                </div>
-              )}
-
-              {BLUR_TABS.has(activeTab) && (
-                <div className="relative">
-                  <div className="absolute inset-0 backdrop-blur-sm bg-white/50 rounded-xl pointer-events-none" />
-                  <div className="h-56 rounded-xl border bg-slate-50 grid place-items-center text-slate-400">
-                    {activeTab}
-                  </div>
-                  <div className="absolute inset-0 grid place-items-center">
-                    <div className="inline-flex items-center gap-2 rounded-full bg-white border px-3 py-1 text-xs shadow">
-                      Unlock in Full Report
-                    </div>
-                  </div>
-                </div>
-              )}
+            <div className="mt-5 text-sm">
+              <div>Content</div>
+              <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full bg-[#006D77]"
+                  style={{ width: `${clamp(content)}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {clamp(content)}%
+              </div>
             </div>
-
-            <div className="mt-4 flex gap-3">
-              <button
-                onClick={orderFull}
-                className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
-              >
-                Order Full Audit
-              </button>
+            <div className="mt-5 text-xs text-slate-500">
+              If you fix the top 3 issues we estimate ≈ <b>+18% leads</b>.
             </div>
           </div>
         </div>
+
+        {/* Tabs + Overview saturs (kā ekrānā) */}
+        <div className="mt-6">
+          <div className="flex gap-2 flex-wrap">
+            {[
+              "Overall",
+              "Sections Present",
+              "Quick Wins",
+              "Prioritized Backlog",
+              "Findings",
+              "Content Audit",
+              "Copy Suggestions",
+            ].map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t as any)}
+                className={`px-3 py-1.5 rounded-full text-sm border ${
+                  tab === t ? "bg-slate-900 text-white" : "bg-white"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {/* OVERALL: kreisā — hero snapshot; labā — trīs paneļi */}
+          {tab === "Overall" && (
+            <div className="mt-4 grid md:grid-cols-[1.1fr,0.9fr] gap-6">
+              <div className="rounded-2xl border bg-white p-5">
+                <div className="text-sm text-slate-500">
+                  Hero Snapshot (top of page)
+                </div>
+                <div className="text-xs text-slate-500">
+                  Cropped to the first viewport for clarity. Suggestions overlay
+                  shows the most impactful fixes.
+                </div>
+                <div className="mt-3 rounded-xl overflow-hidden border bg-white h-[420px]">
+                  {heroSrc ? (
+                    <img
+                      src={heroSrc}
+                      alt="Hero snapshot"
+                      className="w-full h-full object-cover object-top"
+                    />
+                  ) : (
+                    <div className="w-full h-full grid place-items-center text-slate-400">
+                      no image
+                    </div>
+                  )}
+                </div>
+                <div className="mt-2 text-[11px] text-slate-500">
+                  * We show screenshots only for sections with issues. Currently
+                  cropping to the hero area.
+                </div>
+                <div className="mt-3 rounded-lg border bg-white p-3 text-sm">
+                  <div className="text-xs text-slate-500 mb-1">
+                    Top hero suggestions
+                  </div>
+                  <ul className="list-disc pl-5 text-slate-700">
+                    <li>
+                      Hero Section — Revise the hero copy to clearly state
+                      benefits, and highlight a call-to-action.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-2xl border bg-white p-5">
+                  <div className="text-sm font-medium text-slate-700">
+                    Sections Present
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    {(sectionsPresent.length
+                      ? sectionsPresent
+                      : [
+                          { title: "Hero", ok: true },
+                          { title: "Value Prop", ok: true },
+                          { title: "Social Proof", ok: false },
+                          { title: "Pricing", ok: false },
+                          { title: "Features", ok: true },
+                          { title: "Faq", ok: false },
+                          { title: "Contact", ok: true },
+                          { title: "Footer", ok: true },
+                        ]
+                    ).map((s, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <span
+                          className={`h-2 w-2 rounded-full ${
+                            s.ok ? "bg-emerald-500" : "bg-rose-500"
+                          }`}
+                        />
+                        <span>{s.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border bg-white p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium text-slate-700">
+                      Quick Wins
+                    </div>
+                    <div className="text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5">
+                      ≈ +9% leads (if all done)
+                    </div>
+                  </div>
+                  <ul className="mt-3 list-disc pl-5 text-sm text-slate-700">
+                    {(quickWins.length
+                      ? quickWins
+                      : [
+                          "Improve call-to-action buttons to make them more visible.",
+                          "Include testimonials in the hero section for immediate social proof.",
+                        ]
+                    ).map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="rounded-2xl border bg-white p-5">
+                  <div className="text-sm font-medium text-slate-700">
+                    Prioritized Backlog
+                  </div>
+                  <div className="mt-3 space-y-2 text-sm">
+                    {prioritizedBacklog.map((b, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg border px-3 py-2 flex items-center justify-between"
+                      >
+                        <div>{b.title}</div>
+                        <div className="text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5">
+                          {b.lift}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* pārējie tabu satura vietturis (viens-pret-vienu nosaukumi) */}
+          {tab === "Sections Present" && (
+            <div className="mt-4 grid md:grid-cols-2 gap-2">
+              {(sectionsPresent.length ? sectionsPresent : []).map((s, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg border px-3 py-2 flex items-center gap-2"
+                >
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      s.ok ? "bg-emerald-500" : "bg-rose-500"
+                    }`}
+                  />
+                  <span>{s.title}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tab === "Quick Wins" && (
+            <div className="mt-4 rounded-2xl border bg-white p-5">
+              <ul className="list-disc pl-5 space-y-1 text-slate-700">
+                {quickWins.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {tab === "Prioritized Backlog" && (
+            <div className="mt-4 rounded-2xl border bg-white p-5">
+              <div className="space-y-2">
+                {prioritizedBacklog.map((b, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg border px-3 py-2 flex items-center justify-between"
+                  >
+                    <div>{b.title}</div>
+                    <div className="text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5">
+                      {b.lift}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* pārējie tabu — tikai “lock” priekškars, kā tavā lapā */}
+          {["Findings", "Content Audit", "Copy Suggestions"].includes(tab) && (
+            <div className="relative mt-4">
+              <div className="h-56 rounded-2xl border bg-slate-50" />
+              <div className="absolute inset-0 backdrop-blur-sm bg-white/50 rounded-2xl grid place-items-center">
+                <div className="inline-flex items-center gap-2 rounded-full bg-white border px-3 py-1 text-xs shadow">
+                  Unlock in Full Report
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 flex gap-3">
+          <button
+            onClick={orderFull}
+            className="rounded-xl px-5 py-3 bg-[#FFDDD2] text-slate-900 font-medium hover:opacity-90"
+          >
+            Order Full Audit
+          </button>
+          <button
+            onClick={() => alert("Sample report open")}
+            className="rounded-xl px-5 py-3 border bg-white"
+          >
+            See Sample Report
+          </button>
+        </div>
       </section>
 
-      {/* atlikušie bloki – tie paši kā produkcijā */}
+      {/* zemāk — kā tavā lapā */}
       <section id="features" className="mx-auto max-w-[1200px] px-4 py-12">
         <Features />
       </section>

@@ -5,7 +5,6 @@ function normalizeUrl(input: string): string {
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
   try {
     const u = new URL(s);
-    if (!["http:", "https:"].includes(u.protocol)) throw new Error();
     u.hash = "";
     return u.toString();
   } catch {
@@ -17,10 +16,6 @@ export type AnalyzeOk = { ok: true; data: any };
 export type AnalyzeErr = { ok: false; error: string };
 export type AnalyzeResult = AnalyzeOk | AnalyzeErr;
 
-/**
- * Free report analīze no galvenās lapas (Landing).
- * Backend: /api/analyze — jāatstāj neskarts; te tikai noturīga klienta apstrāde.
- */
 export async function runAnalyze(inputUrl: string): Promise<AnalyzeResult> {
   const url = normalizeUrl(inputUrl);
   if (!url) return { ok: false, error: "Empty URL" };
@@ -37,7 +32,6 @@ export async function runAnalyze(inputUrl: string): Promise<AnalyzeResult> {
         const j = JSON.parse(text);
         msg = j?.error || j?.message || msg;
       } catch {
-        // teksta kļūdas no Vercel edge – atstājam kā ir
         msg = text || msg;
       }
       return { ok: false, error: msg };
