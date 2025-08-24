@@ -1,18 +1,10 @@
+// src/components/FreeReport.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { runAnalyze } from "../lib/analyzeClient";
 
-/** ─────────────────────────────────────────────────────────────────────────────
- *  Types – pielāgoti, lai atbalstītu abus formātus
- *  V1 (production): { section, present, quality: "good" | "poor", suggestion? }
- *  V2 (jaunais):    { section, status: "ok" | "weak" | "missing", rationale?, suggestions?[] }
- *  ──────────────────────────────────────────────────────────────────────────── */
-
+/** ===== Types: atbalstām veco un jauno content_audit formātu ===== */
 type Impact = "low" | "medium" | "high";
-
-type Finding = {
-  title: string;
-  impact: Impact;
-  recommendation: string;
-};
+type Finding = { title: string; impact: Impact; recommendation: string };
 
 type BacklogItem = {
   title: string;
@@ -22,7 +14,7 @@ type BacklogItem = {
   notes?: string;
 };
 
-/** Vecais formāts no /api/analyze (production) */
+// Vecais formāts no production /api/analyze
 type LegacyAuditItem = {
   section: string;
   present: boolean;
@@ -30,7 +22,7 @@ type LegacyAuditItem = {
   suggestion?: string;
 };
 
-/** Jaunais formāts, ko daļa koda jau izmanto */
+// Jaunais formāts
 type NewAuditItem = {
   section: string;
   status: "ok" | "weak" | "missing";
@@ -40,7 +32,7 @@ type NewAuditItem = {
 
 type AnyAuditItem = LegacyAuditItem | NewAuditItem;
 
-/** Vienotā forma, ko lieto UI */
+// Vienotais formāts UI vajadzībām
 type AuditRow = {
   section: string;
   status: "ok" | "weak" | "missing";
@@ -48,8 +40,7 @@ type AuditRow = {
   suggestions?: string[];
 };
 
-/** Report forma – pietiek ar obligātajām lietām */
-type FreeReport = {
+type FreeReportData = {
   page?: { url?: string; title?: string };
   meta?: { title?: string; description?: string; canonical?: string };
   seo?: {
@@ -68,10 +59,8 @@ type FreeReport = {
   findings?: Finding[];
   content_audit?: AnyAuditItem[];
   assets?: {
-    /** jaunā versija */
-    suggested_screenshot_url?: string | null;
-    /** production versija */
-    screenshot_url?: string | null;
+    suggested_screenshot_url?: string | null; // jaunais variants
+    screenshot_url?: string | null; // vecais variants
   };
 };
 
@@ -87,7 +76,6 @@ function normalizeUrl(input: string): string {
     return s;
   }
 }
-
 function screenshotUrlFallback(target: string) {
   const url = normalizeUrl(target);
   const tmpl =
@@ -97,8 +85,10 @@ function screenshotUrlFallback(target: string) {
   if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
   return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
 }
+function clamp(n: number, lo = 0, hi = 100) {
+  return Math.max(lo, Math.min(hi, n));
+}
 
-/** Mapējam jebkuras paaudzes content_audit uz vienoto AuditRow[] */
 function normalizeAudit(items?: AnyAuditItem[]): AuditRow[] {
   if (!items || !Array.isArray(items)) return [];
   return items.map((it) => {
@@ -111,7 +101,7 @@ function normalizeAudit(items?: AnyAuditItem[]): AuditRow[] {
         suggestions: it.suggestions || [],
       };
     }
-    // vecais formāts → atvasinām status
+    // vecais formāts
     const v = it as LegacyAuditItem;
     const status: AuditRow["status"] = v.present
       ? v.quality === "poor"
@@ -127,11 +117,7 @@ function normalizeAudit(items?: AnyAuditItem[]): AuditRow[] {
   });
 }
 
-function clamp(n: number, lo = 0, hi = 100) {
-  return Math.max(lo, Math.min(hi, n));
-}
-
-function computeScores(d: FreeReport) {
+function computeScores(d: FreeReportData) {
   let str = 30;
   let cont = 30;
 
@@ -154,30 +140,9 @@ function computeScores(d: FreeReport) {
   };
 }
 
-/** Vienkāršs demo fetch – izmanto esošo /api/analyze ar mode=free */
-async function fetchFree(url: string): Promise<FreeReport> {
-  const u = normalizeUrl(url);
-  const r = await fetch(`/api/analyze?mode=free&url=${encodeURIComponent(u)}`);
-  const text = await r.text();
-  if (!r.ok) {
-    // mēģinām izvilkt sakarīgu kļūdu
-    try {
-      const j = JSON.parse(text);
-      throw new Error(j?.error || j?.message || `HTTP ${r.status}`);
-    } catch {
-      throw new Error(text || `HTTP ${r.status}`);
-    }
-  }
-  try {
-    return JSON.parse(text) as FreeReport;
-  } catch {
-    throw new Error("Invalid JSON from /api/analyze");
-  }
-}
-
 export default function FreeReport() {
   const [url, setUrl] = useState("");
-  const [report, setReport] = useState<FreeReport | null>(null);
+  const [report, setReport] = useState<FreeReportData | null>(null);
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [score, setScore] = useState({
     overall: 73,
@@ -209,9 +174,10 @@ export default function FreeReport() {
     setLoading(true);
     setProgress(15);
     try {
-      const rep = await fetchFree(url.trim());
+      const res = await runAnalyze(url.trim());
+      if (!res.ok) throw new Error(res.error);
       setProgress(80);
-      setReport(rep);
+      setReport(res.data as FreeReportData);
       setProgress(100);
     } catch (e: any) {
       setErr(e?.message || "Analyze failed");
@@ -445,7 +411,40 @@ export default function FreeReport() {
               Sections Present
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-              {sectionsPresent.map((s, i) => (
+              {(
+                (() => {
+                  const d = report;
+                  if (!d) return [];
+                  const ho = d.headingsOutline || [];
+                  const text = [
+                    d.meta?.title || "",
+                    d.meta?.description || "",
+                    ...ho.map((h) => h.text || ""),
+                  ]
+                    .join(" ")
+                    .toLowerCase();
+                  const has = (re: RegExp) => re.test(text);
+                  return [
+                    { title: "hero", ok: (d.seo?.h1Count ?? 0) > 0 },
+                    {
+                      title: "social proof",
+                      ok: has(/testimonial|review|trust|logo/),
+                    },
+                    { title: "features", ok: has(/feature|benefit|capabilit/) },
+                    {
+                      title: "contact",
+                      ok: has(/contact|support|email|phone/),
+                    },
+                    {
+                      title: "value prop",
+                      ok: (d.meta?.description || "").length >= 120,
+                    },
+                    { title: "pricing", ok: has(/price|pricing|plan/) },
+                    { title: "faq", ok: has(/faq|frequently asked|question/) },
+                    { title: "footer", ok: (d.links?.total ?? 0) > 10 },
+                  ];
+                })() as { title: string; ok: boolean }[]
+              ).map((s, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <span
                     className={`h-2 w-2 rounded-full ${
@@ -555,7 +554,7 @@ export default function FreeReport() {
         </div>
       )}
 
-      {/* Content Audit – izmanto normalizētos auditRows ar status */}
+      {/* Content Audit (normalizēti statusi) */}
       {auditRows.length > 0 && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Content Audit</div>
