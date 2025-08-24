@@ -1,8 +1,8 @@
 // api/analyze.ts
-// Free report (non-stream) endpoint — safe drop-in for production.
-// Prefers POST { url, mode: "free" }, supports GET ?url=...&mode=free
-// Requires: OPENAI_API_KEY
-// Optional: OPENAI_MODEL, VITE_SCREENSHOT_URL_TMPL
+// Free report (non-stream) endpoint — drop-in saderīgs ar produkciju.
+// Pieņem POST { url, mode: "free" } un GET ?url=&mode=free
+// Nepieciešams: OPENAI_API_KEY
+// Papildus (neobligāti): OPENAI_MODEL, VITE_SCREENSHOT_URL_TMPL
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
@@ -11,17 +11,17 @@ const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
 type ImpactStr = "high" | "medium" | "low";
 type Suggestion = { title: string; impact: ImpactStr; recommendation: string };
-type LegacyAuditItem = {
-  section: string;
-  present: boolean;
-  quality: "good" | "poor";
-  suggestion?: string;
-};
 type NewAuditItem = {
   section: string;
   status: "ok" | "weak" | "missing";
   rationale?: string;
   suggestions?: string[];
+};
+type LegacyAuditItem = {
+  section: string;
+  present: boolean;
+  quality: "good" | "poor";
+  suggestion?: string;
 };
 type BacklogItem = {
   title: string;
@@ -102,7 +102,7 @@ function classifyLinks(html: string, baseUrl: string) {
         /* ignore */
       }
     } else {
-      internal++; // relative → treat as internal
+      internal++; // relatīvs links → iekšējs
     }
   }
   return { total, internal, external };
@@ -110,19 +110,15 @@ function classifyLinks(html: string, baseUrl: string) {
 function analyzeImages(html: string) {
   const imgRe = /<img\b[^>]*>/gi;
   const altRe = /\balt=["']([^"']*)["']/i;
-  const srcRe = /\bsrc=["']([^"']+)["']/i;
   const imgs = html.match(imgRe) || [];
   let total = imgs.length;
   let missingAlt = 0;
   for (const img of imgs) {
     const alt = img.match(altRe)?.[1];
-    const src = img.match(srcRe)?.[1];
     if (!alt || !alt.trim()) missingAlt++;
-    // ignore `src` here; could filter data-URI or tiny pixel if needed
   }
   return { total, missingAlt };
 }
-
 async function checkRobots(u: string) {
   try {
     const url = new URL(u);
@@ -137,6 +133,32 @@ async function checkRobots(u: string) {
   } catch {
     return { robotsTxtOk: null, sitemapOk: null };
   }
+}
+
+// Tas pats detectSections, kas /api/analyze-stream (lai rezultāti sakristu)
+function detectSections(
+  metaTitle: string,
+  metaDesc: string,
+  headings: { tag: string; text: string }[],
+  plain: string
+) {
+  const bucket = `${metaTitle}\n${metaDesc}\n${headings
+    .map((h) => h.text)
+    .join("\n")}\n${plain}`.toLowerCase();
+  const has = (re: RegExp) => re.test(bucket);
+  return {
+    hero: headings.some((h) => h.tag === "h1"),
+    value_prop:
+      (metaDesc || "").length >= 120 || has(/value prop|benefit|solve|helps/),
+    social_proof: has(/testimonial|review|trust|logo|case study/),
+    pricing: has(/price|pricing|plan|€|\$/),
+    features: has(/feature|benefit|capabilit|how it works/),
+    faq: has(/\bfaq\b|frequently asked|question/),
+    contact: has(/contact|support|email|phone|whatsapp|messenger/),
+    footer:
+      has(/©|copyright|privacy|terms|cookies/) ||
+      (plain.match(/https?:\/\//g) || []).length > 10,
+  };
 }
 
 async function callOpenAI(struct: {
@@ -160,7 +182,7 @@ Return only strict JSON with these fields:
   "prioritized_backlog": [{"title": string, "impact": 1|2|3, "effort": "low"|"medium"|"high", "eta_days": number, "notes": string, "lift_percent": number}],
   "content_audit": [{"section": string, "status": "ok"|"weak"|"missing", "rationale": string, "suggestions": [string]}]
 }
-- Be concise and practical. Up to 5–6 items per list.`;
+- Be concise and practical. Max 6 items per list.`;
 
   const user = {
     role: "user",
@@ -250,17 +272,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       url = normalizeUrl((req.query?.url as string) || "");
     }
     const mode = (
-      ((method === "POST"
+      (method === "POST"
         ? (req.body as any)?.mode
-        : (req.query?.mode as string)) || "free") + ""
-    ).toLowerCase();
+        : (req.query?.mode as string)) || "free"
+    )
+      .toString()
+      .toLowerCase();
 
     if (!url) {
       res.status(400).json({ error: "Missing url" });
       return;
     }
 
-    // 1) Fetch page
+    // 1) Ielasa lapu
     const { status, url: finalUrl, text } = await fetchText(url);
     if (status >= 400 || !text) {
       res
@@ -273,7 +297,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    // 2) Parse structure/meta
+    // 2) Strukturēti rādītāji
     const metaTitle = extract(text, /<title[^>]*>([\s\S]*?)<\/title>/i);
     const metaDesc = extract(
       text,
@@ -292,7 +316,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const robots = await checkRobots(finalUrl);
     const plain = stripTags(text).slice(0, 120000);
 
-    // 3) Call OpenAI for findings/backlog/audit
+    // 3) Detektē sadaļas (kā Full report)
+    const sections_detected = detectSections(
+      metaTitle,
+      metaDesc,
+      headings,
+      plain
+    );
+
+    // 4) AI analīze (reāli quick_wins/backlog/audit)
     let ai: Awaited<ReturnType<typeof callOpenAI>> | null = null;
     try {
       ai = await callOpenAI({
@@ -308,7 +340,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ai = null;
     }
 
-    // 4) Build response (keeps compatibility with FreeReport.tsx normalizer)
     const quick_wins: string[] = (ai?.quick_wins || []).map((s) =>
       String(s).slice(0, 220)
     );
@@ -321,11 +352,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : "low",
       recommendation: String(f.recommendation || "").slice(0, 800),
     }));
-    const prioritized_backlog: BacklogItem[] = normalizeBacklog(
-      ai?.prioritized_backlog
-    );
-
-    // content_audit jaunajā formātā;
     const content_audit_new: NewAuditItem[] = (ai?.content_audit || []).map(
       (c) => {
         const status =
@@ -346,20 +372,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         };
       }
     );
-
-    // papildus: legacy formāts (present/quality/suggestion), ja kāds patērētājs to gaida
-    const content_audit_legacy: LegacyAuditItem[] = content_audit_new.map(
-      (n) => ({
-        section: n.section,
-        present: n.status !== "missing",
-        quality: n.status === "ok" ? "good" : "poor",
-        suggestion:
-          (n.suggestions && n.suggestions[0]) || n.rationale || undefined,
-      })
+    const prioritized_backlog: BacklogItem[] = normalizeBacklog(
+      ai?.prioritized_backlog
     );
 
+    // 5) Score pēc tās pašas formulas kā Full report
+    const scoreFromAI =
+      100 -
+      (content_audit_new.filter((r) => r.status === "missing").length * 5 +
+        content_audit_new.filter((r) => r.status === "weak").length * 2 +
+        (findings.filter((f) => f.impact === "high").length * 10 +
+          findings.filter((f) => f.impact === "medium").length * 5 +
+          findings.filter((f) => f.impact === "low").length * 2));
+
+    const score = Math.max(
+      0,
+      Math.min(100, Math.round(Number.isFinite(scoreFromAI) ? scoreFromAI : 60))
+    );
+
+    // 6) Atbilde (saderīga ar FreeReport.tsx)
     const result = {
-      // jaunie lauki
       page: { url: finalUrl, title: metaTitle || undefined },
       meta: {
         title: metaTitle || undefined,
@@ -380,12 +412,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       quick_wins,
       prioritized_backlog,
       findings,
-      content_audit: content_audit_new, // FreeReport normalizators saprot arī jauno formātu
+      content_audit: content_audit_new,
       assets: {
         screenshot_url: screenshotUrl(finalUrl),
         suggested_screenshot_url: screenshotUrl(finalUrl),
       },
-      // ērtībai klientam:
+      sections_detected,
+      score,
       url: finalUrl,
       finalUrl,
       mode,

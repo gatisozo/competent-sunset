@@ -2,37 +2,32 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { runAnalyze } from "../lib/analyzeClient";
 
-/** ===== Types: atbalstām veco un jauno content_audit formātu ===== */
+// ===== Types (savietojam veco/jauno audit formātu) =====
 type Impact = "low" | "medium" | "high";
 type Finding = { title: string; impact: Impact; recommendation: string };
 
 type BacklogItem = {
   title: string;
-  impact?: Impact;
+  impact?: Impact | 1 | 2 | 3;
   eta_days?: number;
   lift_percent?: number;
   notes?: string;
 };
 
-// Vecais formāts no production /api/analyze
 type LegacyAuditItem = {
   section: string;
   present: boolean;
   quality: "good" | "poor";
   suggestion?: string;
 };
-
-// Jaunais formāts
 type NewAuditItem = {
   section: string;
   status: "ok" | "weak" | "missing";
   rationale?: string;
   suggestions?: string[];
 };
-
 type AnyAuditItem = LegacyAuditItem | NewAuditItem;
 
-// Vienotais formāts UI vajadzībām
 type AuditRow = {
   section: string;
   status: "ok" | "weak" | "missing";
@@ -59,8 +54,20 @@ type FreeReportData = {
   findings?: Finding[];
   content_audit?: AnyAuditItem[];
   assets?: {
-    suggested_screenshot_url?: string | null; // jaunais variants
-    screenshot_url?: string | null; // vecais variants
+    suggested_screenshot_url?: string | null;
+    screenshot_url?: string | null;
+  };
+  // JAUNUMI no servera (ja ir):
+  score?: number;
+  sections_detected?: {
+    hero?: boolean;
+    value_prop?: boolean;
+    social_proof?: boolean;
+    pricing?: boolean;
+    features?: boolean;
+    faq?: boolean;
+    contact?: boolean;
+    footer?: boolean;
   };
 };
 
@@ -93,7 +100,7 @@ function normalizeAudit(items?: AnyAuditItem[]): AuditRow[] {
   if (!items || !Array.isArray(items)) return [];
   return items.map((it) => {
     if ("status" in it) {
-      // jau jaunais formāts
+      // jaunais formāts
       return {
         section: it.section,
         status: it.status,
@@ -117,7 +124,7 @@ function normalizeAudit(items?: AnyAuditItem[]): AuditRow[] {
   });
 }
 
-function computeScores(d: FreeReportData) {
+function computeScoresHeuristic(d: FreeReportData) {
   let str = 30;
   let cont = 30;
 
@@ -165,7 +172,16 @@ export default function FreeReport() {
   useEffect(() => {
     if (!report) return;
     setAuditRows(normalizeAudit(report.content_audit));
-    setScore(computeScores(report));
+
+    // Ja serveris iedeva score → izmantojam to; citādi — heuristiku
+    if (typeof report.score === "number") {
+      setScore((s) => ({
+        ...s,
+        overall: clamp(Math.round(report.score)),
+      }));
+    } else {
+      setScore(computeScoresHeuristic(report));
+    }
   }, [report]);
 
   async function onRun() {
@@ -177,7 +193,8 @@ export default function FreeReport() {
       const res = await runAnalyze(url.trim());
       if (!res.ok) throw new Error(res.error);
       setProgress(80);
-      setReport(res.data as FreeReportData);
+      const data = res.data as FreeReportData;
+      setReport(data);
       setProgress(100);
     } catch (e: any) {
       setErr(e?.message || "Analyze failed");
@@ -189,9 +206,25 @@ export default function FreeReport() {
     }
   }
 
+  // Sections Present — ja serveris iedeva sections_detected, izmantojam; citādi heuristika
   const sectionsPresent = useMemo(() => {
     const d = report;
     if (!d) return [] as { title: string; ok: boolean }[];
+
+    if (d.sections_detected) {
+      const sd = d.sections_detected;
+      return [
+        { title: "hero", ok: !!sd.hero },
+        { title: "social proof", ok: !!sd.social_proof },
+        { title: "features", ok: !!sd.features },
+        { title: "contact", ok: !!sd.contact },
+        { title: "value prop", ok: !!sd.value_prop },
+        { title: "pricing", ok: !!sd.pricing },
+        { title: "faq", ok: !!sd.faq },
+        { title: "footer", ok: !!sd.footer },
+      ];
+    }
+
     const ho = d.headingsOutline || [];
     const text = [
       d.meta?.title || "",
@@ -202,7 +235,6 @@ export default function FreeReport() {
       .toLowerCase();
 
     const has = (re: RegExp) => re.test(text);
-
     return [
       { title: "hero", ok: (d.seo?.h1Count ?? 0) > 0 },
       { title: "social proof", ok: has(/testimonial|review|trust|logo/) },
@@ -265,7 +297,7 @@ export default function FreeReport() {
               </div>
               <div className="mt-2 text-sm">
                 {clamp(score.overall)} / 100{" "}
-                <span className="text-slate-500">Grade (auto)</span>
+                <span className="text-slate-500">Grade</span>
               </div>
             </div>
             <div className="shrink-0">
@@ -411,40 +443,7 @@ export default function FreeReport() {
               Sections Present
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-              {(
-                (() => {
-                  const d = report;
-                  if (!d) return [];
-                  const ho = d.headingsOutline || [];
-                  const text = [
-                    d.meta?.title || "",
-                    d.meta?.description || "",
-                    ...ho.map((h) => h.text || ""),
-                  ]
-                    .join(" ")
-                    .toLowerCase();
-                  const has = (re: RegExp) => re.test(text);
-                  return [
-                    { title: "hero", ok: (d.seo?.h1Count ?? 0) > 0 },
-                    {
-                      title: "social proof",
-                      ok: has(/testimonial|review|trust|logo/),
-                    },
-                    { title: "features", ok: has(/feature|benefit|capabilit/) },
-                    {
-                      title: "contact",
-                      ok: has(/contact|support|email|phone/),
-                    },
-                    {
-                      title: "value prop",
-                      ok: (d.meta?.description || "").length >= 120,
-                    },
-                    { title: "pricing", ok: has(/price|pricing|plan/) },
-                    { title: "faq", ok: has(/faq|frequently asked|question/) },
-                    { title: "footer", ok: (d.links?.total ?? 0) > 10 },
-                  ];
-                })() as { title: string; ok: boolean }[]
-              ).map((s, i) => (
+              {sectionsPresent.map((s, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <span
                     className={`h-2 w-2 rounded-full ${
@@ -499,14 +498,21 @@ export default function FreeReport() {
                       <span
                         className={[
                           "px-2 py-0.5 rounded text-xs border",
-                          b.impact === "high"
+                          b.impact === 3 || b.impact === "high"
                             ? "bg-rose-100 text-rose-800 border-rose-200"
-                            : b.impact === "medium"
+                            : b.impact === 2 || b.impact === "medium"
                             ? "bg-amber-100 text-amber-800 border-amber-200"
                             : "bg-emerald-100 text-emerald-800 border-emerald-200",
                         ].join(" ")}
                       >
-                        impact {b.impact}
+                        impact{" "}
+                        {b.impact === 3
+                          ? "high"
+                          : b.impact === 2
+                          ? "medium"
+                          : b.impact === 1
+                          ? "low"
+                          : (b.impact as any)}
                       </span>
                     )}
                     {b.eta_days ? (
@@ -554,7 +560,7 @@ export default function FreeReport() {
         </div>
       )}
 
-      {/* Content Audit (normalizēti statusi) */}
+      {/* Content Audit */}
       {auditRows.length > 0 && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Content Audit</div>
