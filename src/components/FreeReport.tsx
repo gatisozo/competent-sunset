@@ -173,11 +173,12 @@ export default function FreeReport() {
     if (!report) return;
     setAuditRows(normalizeAudit(report.content_audit));
 
-    // Ja serveris iedeva score → izmantojam to; citādi — heuristiku
+    // JA: droša tipa sašaurināšana score’iem
     if (typeof report.score === "number") {
+      const sVal = Number(report.score); // <- šeit piespiežam number, nevis number|undefined
       setScore((s) => ({
         ...s,
-        overall: clamp(Math.round(report.score)),
+        overall: clamp(Math.round(sVal)),
       }));
     } else {
       setScore(computeScoresHeuristic(report));
