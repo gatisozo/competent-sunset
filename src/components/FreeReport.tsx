@@ -1,337 +1,549 @@
-// src/components/FreeReport.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { runAnalyze } from "../lib/analyzeClient";
-import { StatusBar } from "./StatusBar";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  type FullReport,
+  type Suggestion,
+  type ContentAuditItem,
+} from "../lib/analyze";
 
-type AnalyzeData = {
-  finalUrl?: string;
-  url?: string;
-  fetchedAt?: string;
-  httpStatus?: number;
-  meta?: {
-    title?: string;
-    description?: string;
-    lang?: string;
-    viewport?: string;
-    canonical?: string;
+/* ---------------- utilities ---------------- */
+function getQS(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  const m = new URLSearchParams(window.location.search).get(name);
+  return m ? decodeURIComponent(m) : null;
+}
+function clsx(...a: Array<string | false | null | undefined>) {
+  return a.filter(Boolean).join(" ");
+}
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
+}
+function easeOutCubic(t: number) {
+  return 1 - Math.pow(1 - t, 3);
+}
+function animateNumber(
+  setter: (n: number) => void,
+  from: number,
+  to: number,
+  ms = 900
+) {
+  const start = performance.now(),
+    delta = to - from;
+  const tick = (now: number) => {
+    const t = clamp((now - start) / ms, 0, 1);
+    const eased = easeOutCubic(t);
+    setter(from + delta * eased);
+    if (t < 1) requestAnimationFrame(tick);
   };
-  seo?: {
-    h1Count?: number;
-    h2Count?: number;
-    h3Count?: number;
-    canonicalPresent?: boolean;
-    metaDescriptionPresent?: boolean;
-  };
-  social?: {
-    og?: Record<string, string | undefined>;
-    twitter?: Record<string, string | undefined>;
-  };
-  links?: { total?: number; internal?: number; external?: number };
-  images?: { total?: number; missingAlt?: number };
-  robots?: {
-    robotsTxtUrl?: string;
-    robotsTxtOk?: boolean | null;
-    sitemapUrlGuess?: string;
-    sitemapOk?: boolean | null;
-  };
-  headingsOutline?: Array<{ tag: string; text: string }>;
+  requestAnimationFrame(tick);
+}
+
+/* -------------- hero image crop -------------- */
+const heroCropWrap = "rounded-xl overflow-hidden border bg-white h-[520px]";
+const heroCropImg: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  objectPosition: "top",
+};
+function isHeroFinding(title: string) {
+  const t = title.toLowerCase();
+  return (
+    t.includes("hero") ||
+    t.includes("above the fold") ||
+    t.includes("headline") ||
+    t.includes("cta") ||
+    t.includes("primary button")
+  );
+}
+function hasMeaningfulIssues(
+  findings: { title: string }[] = [],
+  audit?: { section: string; status: "ok" | "weak" | "missing" }[]
+) {
+  const hf = findings.some((f) => isHeroFinding(f.title));
+  const wk = (audit || []).some((c) => c.status !== "ok");
+  return hf || wk;
+}
+
+/* -------------- scoring -------------- */
+function computeScore(
+  findings: Suggestion[] = [],
+  audit: ContentAuditItem[] = []
+) {
+  let score = 100;
+  for (const f of findings)
+    score -= f.impact === "high" ? 10 : f.impact === "medium" ? 5 : 2;
+  for (const c of audit)
+    score -= c.status === "missing" ? 5 : c.status === "weak" ? 2 : 0;
+  return clamp(Math.round(score), 0, 100);
+}
+const impactToLift: Record<number, string> = {
+  3: "≈ +20% leads",
+  2: "≈ +10% leads",
+  1: "≈ +5% leads",
 };
 
-function normalizeUrl(input: string): string {
-  let s = (input ?? "").trim();
-  if (!s) return s;
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) s = `https://${s}`;
-  try {
-    const u = new URL(s);
-    if (!["http:", "https:"].includes(u.protocol))
-      throw new Error("bad protocol");
-    u.hash = "";
-    return u.toString();
-  } catch {
-    return s;
-  }
-}
-
-function safePct(n?: number) {
-  if (typeof n === "number" && isFinite(n))
-    return Math.max(0, Math.min(100, n));
-  return 0;
-}
-
-export default function FreeReport() {
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<AnalyzeData | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const rafRef = useRef<number | null>(null);
-
-  const scores = useMemo(() => {
-    const d = data;
-    if (!d) return { overall: 0, structure: 0, content: 0 };
-    let score = 50;
-
-    if (d.seo?.metaDescriptionPresent) score += 8;
-    if (d.seo?.canonicalPresent) score += 6;
-    if ((d.seo?.h1Count ?? 0) === 1) score += 6;
-    if ((d.seo?.h2Count ?? 0) >= 2) score += 4;
-
-    const ogCount = Object.values(d.social?.og ?? {}).filter(Boolean).length;
-    const twCount = Object.values(d.social?.twitter ?? {}).filter(
-      Boolean
-    ).length;
-    score += Math.min(ogCount + twCount, 6);
-
-    const imgs = d.images?.total ?? 0;
-    const miss = d.images?.missingAlt ?? 0;
-    if (imgs > 0) {
-      const altRatio = (imgs - miss) / imgs;
-      score += Math.round(10 * altRatio);
-    }
-
-    const links = d.links?.total ?? 0;
-    if (links >= 5) score += 4;
-    if (d.robots?.robotsTxtOk) score += 3;
-    if (d.robots?.sitemapOk) score += 3;
-
-    let structure = 30;
-    structure += Math.min(20, (d.seo?.h2Count ?? 0) * 4);
-    structure += d.seo?.canonicalPresent ? 10 : 0;
-    structure = Math.min(100, Math.max(0, structure));
-
-    let content = 30;
-    content += d.seo?.metaDescriptionPresent ? 15 : 0;
-    content += Math.min(15, imgs > 0 ? 10 : 0);
-    content += Math.min(
-      10,
-      imgs > 0 ? Math.round(10 * ((imgs - miss) / Math.max(1, imgs))) : 0
-    );
-    content = Math.min(100, Math.max(0, content));
-
-    score = Math.min(100, Math.max(0, score));
-    return { overall: score, structure, content };
-  }, [data]);
+/* -------------- smart screenshot (spinner + retry + backup) -------------- */
+function useSmartScreenshot(primary?: string | null, backup?: string | null) {
+  const [src, setSrc] = useState<string | null>(primary || null);
+  const [loading, setLoading] = useState<boolean>(!!primary);
+  const [retries, setRetries] = useState(0);
+  const MAX_RETRIES = 6;
 
   useEffect(() => {
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      abortRef.current?.abort();
-    };
+    setSrc(primary || null);
+    setLoading(!!primary);
+    setRetries(0);
+  }, [primary]);
+
+  const appendCb = (u: string) => {
+    try {
+      const url = new URL(u);
+      url.searchParams.set("cb", String(Date.now()));
+      return url.toString();
+    } catch {
+      return u + (u.includes("?") ? "&" : "?") + "cb=" + Date.now();
+    }
+  };
+
+  const onLoad: React.ReactEventHandler<HTMLImageElement> = (e) => {
+    const img = e.currentTarget;
+    const isTiny = img.naturalWidth <= 300 || img.naturalHeight <= 200;
+    const looksGif = (src || "").toLowerCase().includes(".gif");
+
+    if ((isTiny || looksGif) && retries < MAX_RETRIES && src) {
+      setTimeout(() => {
+        setSrc(appendCb(src));
+        setRetries((r) => r + 1);
+      }, 1500);
+      return;
+    }
+    setLoading(false);
+  };
+
+  const onError = () => {
+    if (backup && src !== backup) {
+      setSrc(appendCb(backup));
+      setLoading(true);
+      return;
+    }
+    if (src && retries < MAX_RETRIES) {
+      setSrc(appendCb(src));
+      setRetries((r) => r + 1);
+    } else {
+      setLoading(false);
+    }
+  };
+
+  return { src, loading, onLoad, onError };
+}
+
+/* -------------- component -------------- */
+export default function FullReportView() {
+  const [url, setUrl] = useState<string>(() => getQS("url") || "");
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string>("");
+  const [report, setReport] = useState<FullReport | null>(null);
+  const [displayScore, setDisplayScore] = useState(0);
+
+  // analyze on load only if url exists in QS
+  useEffect(() => {
+    const qsUrl = getQS("url");
+    if (qsUrl) startStreaming(qsUrl, "full");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function startProgress() {
-    setProgress(0);
-    const tick = () => {
-      setProgress((p) => {
-        if (!loading) return p;
-        const next = Math.min(90, p + Math.random() * 6 + 1);
-        return next;
-      });
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-  }
+  // re-animate score when report arrives
+  useEffect(() => {
+    if (!report) return;
+    const target = computeScore(report.findings, report.content_audit || []);
+    animateNumber(setDisplayScore, displayScore, target, 900);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report]);
 
-  async function onAnalyze(e?: React.FormEvent) {
-    e?.preventDefault();
-    if (!input.trim()) return;
-    const url = normalizeUrl(input);
-
-    setErr(null);
-    setData(null);
-    setLoading(true);
-    startProgress();
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const res = await runAnalyze(url, controller.signal);
-    setLoading(false);
-
-    if ((res as any).ok) {
-      setData((res as any).data as AnalyzeData);
-      setProgress(100);
-    } else {
-      setErr((res as any).error || "Analyze failed");
+  /* ---------- streaming ---------- */
+  function startStreaming(u: string, mode: "free" | "full" = "full") {
+    try {
+      setLoading(true);
+      setError("");
       setProgress(0);
+      setReport(null);
+
+      const base = "/api/analyze-stream";
+      const src = `${base}?url=${encodeURIComponent(
+        u
+      )}&mode=${mode}&sid=${Date.now()}`;
+
+      const es = new EventSource(src);
+
+      es.addEventListener("progress", (e: any) => {
+        try {
+          const { value } = JSON.parse(e.data);
+          setProgress(value ?? 0);
+        } catch {}
+      });
+      es.addEventListener("result", (e: any) => {
+        try {
+          const data = JSON.parse(e.data);
+          setReport(data);
+          setProgress(100);
+        } catch (err: any) {
+          setError("Invalid result format");
+        } finally {
+          es.close();
+          setLoading(false);
+        }
+      });
+      es.addEventListener("error", (e: any) => {
+        try {
+          const data = e.data ? JSON.parse(e.data) : null;
+          setError(data?.message || "Stream error");
+        } catch {
+          setError("Stream error");
+        } finally {
+          es.close();
+          setLoading(false);
+        }
+      });
+      es.onerror = () => {
+        /* handled above */
+      };
+    } catch (err: any) {
+      setError(err?.message || "Could not start stream");
+      setLoading(false);
     }
   }
 
-  const niceUrl = useMemo(
-    () => (data ? data.finalUrl || data.url || "" : ""),
-    [data]
-  );
+  /* ---------- handlers ---------- */
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && url.trim()) startStreaming(url.trim(), "full");
+  };
+  const runAnalyze = () => {
+    if (url.trim()) startStreaming(url.trim(), "full");
+  };
+
+  /* ---------- derived ---------- */
+  const findings = (report?.findings || []) as Suggestion[];
+  const contentAudit = report?.content_audit as ContentAuditItem[] | undefined;
+
+  const screenshotUrl = report?.assets?.screenshot_url || null;
+  const screenshotBackup =
+    (report as any)?.assets?.screenshot_url_backup || null;
+  const suggestedShot = report?.assets?.suggested_screenshot_url || null;
+
+  const shot = useSmartScreenshot(screenshotUrl, screenshotBackup);
+
+  const topHeroSuggestions = useMemo(() => {
+    const heroOnes = findings.filter((f) => isHeroFinding(f.title));
+    return (heroOnes.length ? heroOnes : findings).slice(0, 3);
+  }, [findings]);
+
+  // Quick-wins overall lift = 3% per item (cap 30%) — visible big pill
+  const quickWinsLiftPct = useMemo(() => {
+    const n = report?.quick_wins?.length ?? 0;
+    return Math.min(30, n * 3);
+  }, [report?.quick_wins]);
 
   return (
-    <div className="w-full border rounded-2xl p-4 md:p-6 bg-white">
-      <h2 className="text-xl font-semibold mb-3">Free report</h2>
+    <div className="mx-auto max-w-6xl px-3 md:px-4 py-8">
+      <div className="flex items-center justify-between mb-3">
+        <h1 className="text-2xl md:text-3xl font-semibold">Full Report</h1>
 
-      {/* Input */}
-      <form
-        onSubmit={onAnalyze}
-        className="flex flex-col md:flex-row gap-2 mb-4"
-      >
-        <input
-          className="flex-1 border rounded px-3 py-2"
-          placeholder="piem., example.com vai https://example.com"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={loading}
-        />
-        <button
-          type="submit"
-          className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-          disabled={loading || !input.trim()}
-        >
-          {loading ? "Analyzing…" : "Analyze"}
-        </button>
-      </form>
+        <div className="flex gap-2">
+          <button
+            onClick={() => window.print()}
+            className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
+          >
+            Download PDF
+          </button>
+          <button
+            onClick={() => alert("Email sending is not configured yet.")}
+            className="px-3 py-2 rounded-lg bg-[#006D77] text-white text-sm"
+          >
+            Email PDF
+          </button>
+        </div>
+      </div>
 
-      {/* Progress */}
-      {loading && (
-        <div className="mb-4">
-          <StatusBar active={true} />
-          <div className="mt-2 text-sm text-gray-600">
-            Progress: {Math.round(progress)}%
+      {/* Controls */}
+      <div className="flex flex-col gap-2 mb-4">
+        <div className="flex gap-2">
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={onKey}
+            placeholder="yourdomain.com"
+            className="flex-1 rounded-lg px-3 py-2 bg-white border outline-none focus:ring-2 focus:ring-[#83C5BE]"
+          />
+          <button
+            disabled={loading || !url.trim()}
+            onClick={runAnalyze}
+            className="rounded-lg px-4 py-2 bg-[#006D77] text-white disabled:opacity-60"
+          >
+            {loading ? "Analyzing…" : "Analyze"}
+          </button>
+        </div>
+
+        {/* Streaming progress */}
+        {loading && (
+          <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+            <div
+              className="h-full bg-[#006D77] transition-[width] duration-200"
+              style={{ width: `${progress}%` }}
+            />
           </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 text-red-700 p-3 text-sm">
+          {error}
         </div>
       )}
 
-      {/* Error */}
-      {err && <p className="text-red-600 mb-4 text-sm">{err}</p>}
-
-      {/* Result */}
-      {data && !loading && (
-        <div className="space-y-4">
-          <div className="text-sm text-gray-700">
-            <div>
-              <b>URL:</b> {niceUrl}
+      {/* Main grid */}
+      <div className="grid md:grid-cols-3 gap-4">
+        {/* Left: page + hero visual + findings */}
+        <div className="md:col-span-2 space-y-4">
+          {/* Page meta */}
+          {report?.page && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-xs text-slate-500">URL</div>
+              <div className="truncate">{report.page.url}</div>
+              {report.page.title && (
+                <>
+                  <div className="mt-2 text-xs text-slate-500">Title</div>
+                  <div className="">{report.page.title}</div>
+                </>
+              )}
             </div>
-            <div>
-              <b>Fetched:</b>{" "}
-              {data.fetchedAt ? new Date(data.fetchedAt).toLocaleString() : "—"}
-            </div>
-            <div>
-              <b>HTTP status:</b> {data.httpStatus ?? "—"}
-            </div>
-            <div>
-              <b>Language:</b> {data.meta?.lang ?? "—"}
-            </div>
-          </div>
+          )}
 
-          <div className="grid md:grid-cols-2 gap-4">
-            <section className="border rounded p-3">
-              <h3 className="font-medium mb-1">Meta</h3>
-              <ul className="text-sm list-disc pl-5">
-                <li>
-                  <b>Title:</b> {data.meta?.title ?? "—"}
-                </li>
-                <li>
-                  <b>Description:</b>{" "}
-                  {data.meta?.description
-                    ? `${data.meta.description.slice(0, 160)}${
-                        data.meta.description.length > 160 ? "…" : ""
-                      }`
-                    : "—"}
-                </li>
-                <li>
-                  <b>Canonical:</b> {data.meta?.canonical ?? "—"}
-                </li>
-              </ul>
-            </section>
+          {/* Visual: hero snapshot (cropped) */}
+          {hasMeaningfulIssues(findings, contentAudit) && screenshotUrl && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium">Hero Snapshot (top of page)</div>
+              <div className="text-sm text-slate-600">
+                Cropped to the first viewport for clarity. Suggestions overlay
+                shows the most impactful fixes.
+              </div>
 
-            <section className="border rounded p-3">
-              <h3 className="font-medium mb-1">Headings</h3>
-              <p className="text-sm">
-                H1 / H2 / H3: {data.seo?.h1Count ?? 0} /{" "}
-                {data.seo?.h2Count ?? 0} / {data.seo?.h3Count ?? 0}
-              </p>
-            </section>
+              <div className={`${heroCropWrap} relative mt-2`}>
+                {/* Spinner overlay while loading */}
+                {shot.loading && (
+                  <div className="absolute inset-0 grid place-items-center bg-white/60">
+                    <div className="h-8 w-8 border-2 border-slate-300 border-t-[#006D77] rounded-full animate-spin" />
+                  </div>
+                )}
 
-            <section className="border rounded p-3">
-              <h3 className="font-medium mb-1">Links</h3>
-              <p className="text-sm">
-                Total: {data.links?.total ?? 0} · Internal:{" "}
-                {data.links?.internal ?? 0} · External:{" "}
-                {data.links?.external ?? 0}
-              </p>
-            </section>
-
-            <section className="border rounded p-3">
-              <h3 className="font-medium mb-1">Images</h3>
-              <p className="text-sm">
-                Total: {data.images?.total ?? 0} · Missing ALT:{" "}
-                {data.images?.missingAlt ?? 0}
-              </p>
-            </section>
-
-            <section className="border rounded p-3 md:col-span-2">
-              <h3 className="font-medium mb-1">Robots / Sitemap</h3>
-              <ul className="list-disc pl-5 text-sm">
-                <li>
-                  <b>robots.txt:</b>{" "}
-                  {data.robots?.robotsTxtOk === null
-                    ? "n/a"
-                    : data.robots?.robotsTxtOk
-                    ? "OK"
-                    : "Not found"}
-                </li>
-                <li>
-                  <b>sitemap:</b>{" "}
-                  {data.robots?.sitemapOk === null
-                    ? "n/a"
-                    : data.robots?.sitemapOk
-                    ? "OK"
-                    : "Not found"}
-                </li>
-              </ul>
-            </section>
-          </div>
-
-          {/* Simple score */}
-          <section className="border rounded p-3">
-            <h3 className="font-medium mb-1">Score (auto)</h3>
-            <div className="text-sm">
-              <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
-                <div
-                  className="h-full bg-black"
-                  style={{ width: `${safePct(scores.overall)}%` }}
+                {/* eslint-disable-next-line jsx-a11y/alt-text */}
+                <img
+                  src={shot.src || undefined}
+                  style={heroCropImg}
+                  onLoad={shot.onLoad}
+                  onError={shot.onError}
+                  className={
+                    shot.loading
+                      ? "opacity-0 transition-opacity duration-300"
+                      : "opacity-100 transition-opacity duration-300"
+                  }
                 />
-              </div>
-              <div className="mt-2">
-                Overall: {safePct(scores.overall)} / 100
+
+                {/* Overlay: top hero suggestions */}
+                {topHeroSuggestions.length > 0 && (
+                  <div className="absolute right-2 bottom-2 bg-white/95 border rounded-lg p-3 text-xs max-w-[85%] shadow">
+                    <div className="font-medium mb-1">Top hero suggestions</div>
+                    <ul className="space-y-1">
+                      {topHeroSuggestions.map((s, i) => (
+                        <li key={i}>
+                          • <b>{s.title}</b> — {s.recommendation}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
-              <div className="mt-3 grid sm:grid-cols-2 gap-3">
-                <div>
-                  <div className="text-xs text-gray-600">Structure</div>
-                  <div className="mt-1 h-2 rounded-full bg-slate-200 overflow-hidden">
-                    <div
-                      className="h-full bg-gray-800"
-                      style={{ width: `${safePct(scores.structure)}%` }}
-                    />
-                  </div>
-                  <div className="text-xs mt-1">
-                    {safePct(scores.structure)}%
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-600">Content</div>
-                  <div className="mt-1 h-2 rounded-full bg-slate-200 overflow-hidden">
-                    <div
-                      className="h-full bg-gray-800"
-                      style={{ width: `${safePct(scores.content)}%` }}
-                    />
-                  </div>
-                  <div className="text-xs mt-1">{safePct(scores.content)}%</div>
-                </div>
+              <div className="mt-1 text-xs text-slate-500">
+                * We show screenshots only for sections with issues. Currently
+                cropping to the hero area.
               </div>
             </div>
-          </section>
+          )}
+
+          {/* Findings list */}
+          {findings.length > 0 && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium mb-2">Findings</div>
+              <div className="grid gap-3">
+                {findings.map((f, i) => (
+                  <div
+                    key={i}
+                    className="p-4 rounded-lg border bg-white flex items-start gap-3"
+                  >
+                    <div className="pt-1">
+                      <span
+                        className={clsx(
+                          "px-2 py-0.5 rounded text-xs font-medium",
+                          f.impact === "high" && "bg-red-100 text-red-700",
+                          f.impact === "medium" &&
+                            "bg-amber-100 text-amber-700",
+                          f.impact === "low" &&
+                            "bg-emerald-100 text-emerald-700"
+                        )}
+                      >
+                        {(f.impact || "low").toUpperCase()}
+                      </span>
+                    </div>
+                    <div>
+                      <div className="font-medium">{f.title}</div>
+                      <div className="text-sm text-slate-600 mt-1">
+                        {f.recommendation}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Content audit */}
+          {contentAudit && contentAudit.length > 0 && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium mb-2">Content Audit</div>
+              <div className="grid gap-3">
+                {contentAudit.map((c, i) => (
+                  <div key={i} className="p-4 rounded-lg border bg-white">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium capitalize">
+                        {c.section.replace(/_/g, " ")}
+                      </span>
+                      <span
+                        className={clsx(
+                          "text-xs px-2 py-0.5 rounded",
+                          c.status === "ok" &&
+                            "bg-emerald-100 text-emerald-700",
+                          c.status === "weak" && "bg-amber-100 text-amber-700",
+                          c.status === "missing" && "bg-red-100 text-red-700"
+                        )}
+                      >
+                        {c.status}
+                      </span>
+                    </div>
+                    {c.rationale && (
+                      <div className="text-sm text-slate-600 mt-1">
+                        {c.rationale}
+                      </div>
+                    )}
+                    {c.suggestions && c.suggestions.length > 0 && (
+                      <ul className="text-sm text-slate-700 mt-2 list-disc pl-5">
+                        {c.suggestions.map((s, j) => (
+                          <li key={j}>{s}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Right: score + sections + quick wins + backlog */}
+        <div className="space-y-4">
+          {/* Score (animated) */}
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm text-slate-600">Score</div>
+            <div className="mt-2 h-3 rounded-full bg-slate-200 overflow-hidden">
+              <div
+                className="h-full bg-[#006D77]"
+                style={{ width: `${clamp(displayScore, 0, 100)}%` }}
+              />
+            </div>
+            <div className="mt-1 text-sm">{Math.round(displayScore)} / 100</div>
+            {loading && (
+              <div className="mt-1 text-xs text-slate-500">
+                Streaming analysis…
+              </div>
+            )}
+          </div>
+
+          {/* Sections present */}
+          {report?.sections_detected && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="font-medium mb-2">Sections Present</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                {Object.entries(report.sections_detected).map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2">
+                    <span
+                      className={clsx(
+                        "h-2 w-2 rounded-full",
+                        v ? "bg-emerald-500" : "bg-slate-300"
+                      )}
+                    />
+                    <span className="capitalize">{k.replace(/_/g, " ")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Quick wins + overall lift */}
+          {report?.quick_wins && report.quick_wins.length > 0 && (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="flex items-center justify-between">
+                <div className="font-medium">Quick Wins</div>
+                <div className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                  ≈ +{quickWinsLiftPct}% leads (if all done)
+                </div>
+              </div>
+              <ul className="text-sm text-slate-700 list-disc pl-5 mt-2">
+                {report.quick_wins.map((q, i) => (
+                  <li key={i}>{q}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Backlog with big conversion-lift badges */}
+          {report?.prioritized_backlog &&
+            report.prioritized_backlog.length > 0 && (
+              <div className="rounded-xl border bg-white p-3">
+                <div className="font-medium mb-2">Prioritized Backlog</div>
+                <div className="space-y-3">
+                  {report.prioritized_backlog.map((b, i) => (
+                    <div key={i} className="border rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-medium">{b.title}</div>
+                        <span className="px-3 py-1 rounded-full text-xs md:text-sm font-semibold bg-emerald-100 text-emerald-800">
+                          {impactToLift[b.impact] || "Potential lift"}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-600 flex flex-wrap items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-slate-100">
+                          Impact {b.impact}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-slate-100">
+                          Effort {b.effort}
+                        </span>
+                        {"eta_days" in b && (
+                          <span className="px-2 py-0.5 rounded bg-slate-100">
+                            {b.eta_days}d
+                          </span>
+                        )}
+                      </div>
+                      {b.notes && (
+                        <div className="mt-1 text-sm text-slate-600">
+                          {b.notes}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+        </div>
+      </div>
     </div>
   );
 }
