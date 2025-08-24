@@ -1,4 +1,6 @@
 // src/lib/analyzeClient.ts
+const LAST_KEY = "holbox:lastAnalyzedUrl";
+
 function normalizeUrl(input: string): string {
   let s = (input || "").trim();
   if (!s) return s;
@@ -12,10 +14,31 @@ function normalizeUrl(input: string): string {
   }
 }
 
+export function setLastAnalyzedUrl(u: string) {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(LAST_KEY, u);
+    }
+  } catch {}
+}
+
+export function getLastAnalyzedUrl(): string | null {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      return sessionStorage.getItem(LAST_KEY);
+    }
+  } catch {}
+  return null;
+}
+
 export type AnalyzeOk = { ok: true; data: any };
 export type AnalyzeErr = { ok: false; error: string };
 export type AnalyzeResult = AnalyzeOk | AnalyzeErr;
 
+/**
+ * Free report analīze no galvenās lapas (Landing).
+ * Backend: /api/analyze — paliek tāds pats, te tikai noturīga klienta apstrāde.
+ */
 export async function runAnalyze(inputUrl: string): Promise<AnalyzeResult> {
   const url = normalizeUrl(inputUrl);
   if (!url) return { ok: false, error: "Empty URL" };
@@ -27,6 +50,7 @@ export async function runAnalyze(inputUrl: string): Promise<AnalyzeResult> {
     const text = await r.text();
 
     if (!r.ok) {
+      // mēģinām izvilkt kļūdas ziņu no JSON; ja ne – atstājam tekstu
       let msg = `HTTP ${r.status}`;
       try {
         const j = JSON.parse(text);
@@ -37,8 +61,14 @@ export async function runAnalyze(inputUrl: string): Promise<AnalyzeResult> {
       return { ok: false, error: msg };
     }
 
+    // veiksmīgs gadījums – jābūt JSON
     try {
       const data = JSON.parse(text);
+
+      // saglabājam pēdējo URL — izmanto Order Full Audit
+      const last = data?.finalUrl || data?.url || url;
+      if (last) setLastAnalyzedUrl(last);
+
       return { ok: true, data };
     } catch {
       return { ok: false, error: "Invalid JSON from /api/analyze" };
