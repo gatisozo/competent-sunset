@@ -1,6 +1,5 @@
 // src/components/OrderFullAuditButton.tsx
 import React from "react";
-import { getLastAnalyzedUrl } from "../lib/analyzeClient";
 
 function normalizeUrl(input: string): string {
   let s = (input || "").trim();
@@ -15,12 +14,30 @@ function normalizeUrl(input: string): string {
   }
 }
 
+function getLastAnalyzedUrlLocal(): string | null {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      // mēģinām vairākus iespējamos atslēgvārdus
+      const keys = [
+        "holbox:lastAnalyzedUrl",
+        "lastAnalyzedUrl",
+        "holbox:last-url",
+      ];
+      for (const k of keys) {
+        const v = sessionStorage.getItem(k);
+        if (v && v.trim()) return v;
+      }
+    }
+  } catch {}
+  return null;
+}
+
 type Props = {
   /** Ja vēlies, iedod pašreiz ievadīto URL no inputa kā rezerves variantu */
   fallbackUrl?: string;
-  /** Pielāgo savas klases, lai dizains paliek **tieši tāds pats** kā tev bija */
+  /** Saglabā savas klases/stilus */
   className?: string;
-  children?: React.ReactNode; // piemēram, “Order Full Audit”
+  children?: React.ReactNode;
 };
 
 export default function OrderFullAuditButton({
@@ -31,8 +48,8 @@ export default function OrderFullAuditButton({
   const onClick = (e: React.MouseEvent) => {
     e.preventDefault();
 
-    const last = getLastAnalyzedUrl();
-    const candidate = last || fallbackUrl || "";
+    const stored = getLastAnalyzedUrlLocal();
+    const candidate = stored || fallbackUrl || "";
     const u = candidate ? normalizeUrl(candidate) : "";
 
     const href = `/full?autostart=1${u ? `&url=${encodeURIComponent(u)}` : ""}`;
