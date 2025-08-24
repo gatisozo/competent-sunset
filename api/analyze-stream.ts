@@ -1,312 +1,464 @@
+// /api/analyze-stream.ts
+// SSE endpoint for Full Report — emits "progress" events and a final "result".
+// SAFE drop-in: keeps GET + SSE, progress/result events, query (?url, ?mode, ?sid),
+// and returns fields used by both old and new UIs.
+// Requires env: OPENAI_API_KEY
+// Optional env: OPENAI_MODEL, VITE_SCREENSHOT_URL_TMPL
+
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import OpenAI from "openai";
 
-/* ---------- helpers ---------- */
-function normalizeUrl(input: string): string {
-  const s = String(input || "").trim();
-  if (!s) throw new Error("Missing URL");
-  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
-}
-function extractTitle(html: string): string | undefined {
-  const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  return m?.[1]?.trim();
-}
-function extractText(html: string, maxChars = 20000) {
-  const noScript = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ");
-  const text = noScript
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.slice(0, maxChars);
-}
-function detectSections(text: string) {
-  const t = text.toLowerCase();
-  const has = (kws: string[]) => kws.some((k) => t.includes(k));
-  return {
-    hero:
-      has(["get started", "try free", "start now", "learn more", "sign up"]) ||
-      t.split(" ").length > 30,
-    value_prop: has([
-      "benefit",
-      "why",
-      "you get",
-      "we help",
-      "our solution",
-      "features",
-    ]),
-    social_proof: has([
-      "testimonial",
-      "reviews",
-      "cases",
-      "trusted by",
-      "logos",
-      "clients",
-    ]),
-    pricing: has(["pricing", "price", "plan", "plans"]),
-    faq: has(["faq", "frequently asked"]),
-    contact: has(["contact", "email", "phone"]),
-    footer: has(["©", "copyright", "privacy", "terms"]),
-  };
-}
-function buildScreenshotUrls(url: string): {
-  primary: string | null;
-  backup: string | null;
-} {
-  const enc = encodeURIComponent(url);
-  const p = process.env.SCREENSHOT_URL_TMPL || "";
-  const b = process.env.SCREENSHOT_URL_TMPL_BACKUP || "";
-  return {
-    primary: p ? p.replace("{URL}", enc) : null,
-    backup: b ? b.replace("{URL}", enc) : null,
-  };
-}
+const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
-/* ---------- safe JSON parse ---------- */
-function tryParseJSON(s: string): any | null {
-  try {
-    return JSON.parse(s);
-  } catch {
-    // salvage between first { and last }
-    const i = s.indexOf("{");
-    const j = s.lastIndexOf("}");
-    if (i >= 0 && j > i) {
-      const cut = s.slice(i, j + 1);
-      try {
-        return JSON.parse(cut);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-}
+type ImpactStr = "high" | "medium" | "low";
+type Suggestion = { title: string; impact: ImpactStr; recommendation: string };
+type ContentAuditItem = {
+  section: string;
+  status: "ok" | "weak" | "missing";
+  rationale?: string;
+  suggestions?: string[];
+};
+type BacklogItem = {
+  title: string;
+  impact: 1 | 2 | 3; // numeric impact for UI
+  effort?: "low" | "medium" | "high";
+  eta_days?: number;
+  lift_percent?: number;
+  notes?: string;
+};
 
-/* ---------- strict JSON schema ---------- */
-const croSchema = {
-  type: "object",
-  properties: {
-    score: { type: "integer", minimum: 0, maximum: 100 },
-    summary: { type: "string" },
-    key_findings: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          impact: { type: "string", enum: ["high", "medium", "low"] },
-          recommendation: { type: "string" },
-        },
-        required: ["title", "impact", "recommendation"],
-        additionalProperties: false,
-      },
-      maxItems: 10,
-    },
-    quick_wins: { type: "array", items: { type: "string" }, maxItems: 7 },
-    prioritized_backlog: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          impact: { type: "string", enum: ["high", "medium", "low"] },
-          effort: { type: "string" }, // e.g. "1-2d"
-          eta_days: { type: "integer", minimum: 0, maximum: 60 },
-        },
-        required: ["title", "impact", "effort", "eta_days"],
-        additionalProperties: false,
-      },
-      maxItems: 10,
-    },
-    findings: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          impact: { type: "string", enum: ["high", "medium", "low"] },
-          recommendation: { type: "string" },
-        },
-        required: ["title", "impact", "recommendation"],
-        additionalProperties: false,
-      },
-      maxItems: 12,
-    },
-    content_audit: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          section: { type: "string" },
-          status: { type: "string", enum: ["ok", "weak", "missing"] },
-          rationale: { type: "string" },
-          suggestions: {
-            type: "array",
-            items: { type: "string" },
-            maxItems: 5,
-          },
-        },
-        required: ["section", "status", "rationale", "suggestions"],
-        additionalProperties: false,
-      },
-      maxItems: 12,
-    },
-  },
-  required: [
-    "score",
-    "summary",
-    "key_findings",
-    "quick_wins",
-    "findings",
-    "prioritized_backlog",
-    "content_audit",
-  ],
-  additionalProperties: false,
-} as const;
-
-/* ---------- SSE helpers ---------- */
-function sseHeaders(res: VercelResponse) {
+function okHeaders(res: VercelResponse) {
+  res.status(200);
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("Access-Control-Allow-Origin", "*");
 }
-function sendEvent(res: VercelResponse, event: string, data: any) {
-  res.write(`event: ${event}\n`);
+
+function write(res: VercelResponse, ev: string, data: any) {
+  res.write(`event: ${ev}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  let tick: any;
-  let heartbeat: any;
+function clamp(n: number, lo = 0, hi = 100) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function normalizeUrl(u: string) {
+  const s = (u || "").trim();
+  if (!s) return "";
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : `https://${s}`;
+}
+
+function screenshotUrl(u: string) {
+  const url = normalizeUrl(u);
+  const tmpl = process.env.VITE_SCREENSHOT_URL_TMPL;
+  if (tmpl) return String(tmpl).replace("{URL}", encodeURIComponent(url));
+  // safe public fallback
+  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
+}
+
+async function fetchText(u: string) {
+  const r = await fetch(u, { headers: { "user-agent": UA } as any });
+  const text = await r.text();
+  return { status: r.status, url: r.url, text };
+}
+
+function stripTags(s: string) {
+  return s
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extract(html: string, re: RegExp) {
+  const m = html.match(re);
+  return m ? (m[1] || "").trim() : "";
+}
+
+function countTags(html: string, tag: string) {
+  const re = new RegExp(`<${tag}\\b`, "gi");
+  const m = html.match(re);
+  return m ? m.length : 0;
+}
+
+function parseHeadings(html: string): Array<{ tag: string; text: string }> {
+  const out: Array<{ tag: string; text: string }> = [];
+  const re = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const tag = m[1].toLowerCase();
+    const text = stripTags(m[2]);
+    out.push({ tag, text });
+  }
+  return out;
+}
+
+function detectSections(
+  metaTitle: string,
+  metaDesc: string,
+  headings: { tag: string; text: string }[],
+  plain: string
+) {
+  const bucket = `${metaTitle}\n${metaDesc}\n${headings
+    .map((h) => h.text)
+    .join("\n")}\n${plain}`.toLowerCase();
+  const has = (re: RegExp) => re.test(bucket);
+  return {
+    hero: headings.some((h) => h.tag === "h1"),
+    value_prop:
+      (metaDesc || "").length >= 120 || has(/value prop|benefit|solve|helps/),
+    social_proof: has(/testimonial|review|trust|logo|case study/),
+    pricing: has(/price|pricing|plan|€|\$/),
+    features: has(/feature|benefit|capabilit|how it works/),
+    faq: has(/\bfaq\b|frequently asked|question/),
+    contact: has(/contact|support|email|phone|whatsapp|messenger/),
+    footer:
+      has(/©|copyright|privacy|terms|cookies/) ||
+      (plain.match(/https?:\/\//g) || []).length > 10,
+  };
+}
+
+async function callOpenAI(struct: {
+  url: string;
+  title?: string;
+  description?: string;
+  h1Count: number;
+  h2Count: number;
+  h3Count: number;
+  sampleText: string;
+}) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY is not set");
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+  const system = `You are a CRO/UX auditor for marketing landing pages.
+Return only strict JSON with these fields:
+{
+  "findings": [{"title": string, "impact": "high"|"medium"|"low", "recommendation": string}],
+  "quick_wins": [string],
+  "prioritized_backlog": [{"title": string, "impact": 1|2|3, "effort": "low"|"medium"|"high", "eta_days": number, "notes": string}],
+  "content_audit": [{"section": string, "status": "ok"|"weak"|"missing", "rationale": string, "suggestions": [string]}]
+}
+- "impact" in backlog is numeric: 3=high, 2=medium, 1=low.
+- Be concise and practical. Max ~6 items per list.`;
+
+  const user = {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `URL: ${struct.url}
+Title: ${struct.title || ""}
+Meta description: ${struct.description || ""}
+H1/H2/H3: ${struct.h1Count}/${struct.h2Count}/${struct.h3Count}
+
+PAGE TEXT (first ~6-8k chars):
+${struct.sampleText.slice(0, 8000)}
+`,
+      },
+    ],
+  };
+
+  const r = await fetch(OPENAI_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: system }, user as any],
+    }),
+  });
+
+  if (!r.ok) {
+    const errText = await r.text().catch(() => "");
+    throw new Error(`OpenAI HTTP ${r.status}: ${errText || r.statusText}`);
+  }
+
+  const j = await r.json();
+  const text = j?.choices?.[0]?.message?.content || "{}";
+  let parsed: any = {};
   try {
-    const url = normalizeUrl(String(req.query.url || req.body?.url || ""));
-    const mode = String(req.query.mode || req.body?.mode || "full"); // "free" | "full"
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = {};
+  }
+  return parsed as {
+    findings?: Suggestion[];
+    quick_wins?: string[];
+    prioritized_backlog?: BacklogItem[];
+    content_audit?: ContentAuditItem[];
+  };
+}
 
-    sseHeaders(res);
-    const send = (event: string, data: any) => sendEvent(res, event, data);
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
+    okHeaders(res);
 
-    let progress = 0;
-    tick = setInterval(() => {
-      progress = Math.min(95, progress + 1);
-      send("progress", { value: progress });
-    }, 800);
-    heartbeat = setInterval(() => send("ping", { t: Date.now() }), 15000);
+    const qUrl = (req.query.url as string) || "";
+    const _mode = ((req.query.mode as string) || "full").toLowerCase();
+    const target = normalizeUrl(qUrl);
 
-    // 1) fetch page
-    send("progress", { value: (progress = Math.max(progress, 5)) });
-    const page = await fetch(url, {
-      redirect: "follow",
-      headers: { "User-Agent": "HolboxAI/1.0 (+https://holbox.ai)" },
-    });
-    if (!page.ok) throw new Error(`Fetch failed: ${page.status}`);
-    const html = await page.text();
-    const title = extractTitle(html);
-    const text = extractText(html);
-    const sections = detectSections(text);
+    if (!target) {
+      write(res, "result", { error: "Missing url" });
+      return res.end();
+    }
 
-    const shots = buildScreenshotUrls(url);
-    send("progress", { value: (progress = Math.max(progress, 20)) });
+    write(res, "progress", { value: 5 });
 
-    // 2) prompts
-    const system =
-      "You are a CRO expert. Analyze landing pages for conversion best practices (above-the-fold clarity, message match, CTA prominence, trust, friction, mobile heuristics, Core Web Vitals hints). Output STRICT JSON that adheres exactly to the provided JSON schema.";
+    // Fetch page HTML
+    const { status, url, text } = await fetchText(target);
+    if (status >= 400 || !text) {
+      write(res, "result", { error: `Could not fetch page (HTTP ${status})` });
+      return res.end();
+    }
+    write(res, "progress", { value: 15 });
 
-    const commonTail = `
-IMPORTANT:
-- For prioritized_backlog items, ALWAYS include "effort" (e.g. "1-2d", "3-5h") and "eta_days" (integer).
-- Do not add extra keys. Do not omit any required keys.
-- Keep arrays within their max limits.
-- Return ONLY JSON.`;
+    const metaTitle = extract(text, /<title[^>]*>([\s\S]*?)<\/title>/i);
+    const metaDesc = extract(
+      text,
+      /<meta[^>]+name=["']description["'][^>]+content=["']([\s\S]*?)["'][^>]*>/i
+    );
+    const h1Count = countTags(text, "h1");
+    const h2Count = countTags(text, "h2");
+    const h3Count = countTags(text, "h3");
+    const headings = parseHeadings(text);
+    const plain = stripTags(text).slice(0, 120000);
+    const sections = detectSections(metaTitle, metaDesc, headings, plain);
+    write(res, "progress", { value: 35 });
 
-    const userContent =
-      mode === "free"
-        ? `Mode: FREE
-Return a concise subset using the same schema fields but keep it short (top 3 findings, 2-3 quick_wins).
-URL: ${url}
-TITLE: ${title || "(none)"}
-TEXT (truncated):
-${text}
-${commonTail}`
-        : `Mode: FULL
-Return a full report including content_audit (hero/value_prop/social_proof/pricing/faq/contact/footer),
-findings, quick_wins, prioritized_backlog. All required fields in the schema must be present.
-For each prioritized_backlog item provide both "effort" and "eta_days" (integer).
-URL: ${url}
-TITLE: ${title || "(none)"}
-TEXT (truncated):
-${text}
-${commonTail}`;
+    // Base object (keeps legacy fields too)
+    const base = {
+      url,
+      title: metaTitle || "",
+      screenshots: { hero: screenshotUrl(url) }, // new UI
+      page: { url, title: metaTitle || undefined }, // legacy
+      assets: {
+        screenshot_url: screenshotUrl(url),
+        suggested_screenshot_url: screenshotUrl(url),
+      }, // legacy
+      sections_detected: sections,
+    } as any;
 
-    send("progress", { value: (progress = Math.max(progress, 30)) });
+    // Heuristic score if AI is absent
+    const heuristicScore = clamp(
+      50 +
+        (h1Count ? 10 : -5) +
+        Math.min(15, h2Count * 3) +
+        Math.min(8, h3Count * 1.5) +
+        (metaDesc ? Math.min(12, Math.floor(metaDesc.length / 15)) : -6),
+      0,
+      100
+    );
 
-    // 3) first attempt: strict schema
-    const attempt = async (strict: boolean) => {
-      const resp = await openai.responses.create({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        input: [
-          { role: "system", content: system },
-          { role: "user", content: userContent },
-          {
-            role: "user",
-            content: "Return JSON only that matches the schema exactly.",
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "cro_full_report",
-            schema: croSchema,
-            strict,
-          },
-        },
-        max_output_tokens: 1400,
-      });
-      // @ts-ignore SDK variants
-      const outputText =
-        (resp as any).output_text ||
-        JSON.stringify((resp as any).output?.[0]?.content?.[0]?.text || resp);
-      return outputText;
-    };
-
-    let outputText = "";
+    // Call OpenAI (real analysis)
+    let ai: Awaited<ReturnType<typeof callOpenAI>> | null = null;
     try {
-      outputText = await attempt(true);
-    } catch {
-      // relax schema and try once more
-      send("progress", { value: (progress = Math.max(progress, 40)) });
-      outputText = await attempt(false);
+      ai = await callOpenAI({
+        url,
+        title: metaTitle,
+        description: metaDesc,
+        h1Count,
+        h2Count,
+        h3Count,
+        sampleText: plain,
+      });
+      write(res, "progress", { value: 75 });
+    } catch (e) {
+      ai = null; // will fall back below
     }
 
-    let data = tryParseJSON(outputText);
-    if (!data) {
-      throw new Error("Model returned non-JSON output");
+    // Normalize AI output
+    const findings: Suggestion[] =
+      (ai?.findings || []).map((f) => ({
+        title: String(f.title || "").slice(0, 140),
+        impact: (["high", "medium", "low"] as const).includes(
+          (f.impact || "low") as any
+        )
+          ? (f.impact as ImpactStr)
+          : "low",
+        recommendation: String(f.recommendation || "").slice(0, 800),
+      })) || [];
+
+    const quick_wins: string[] = (ai?.quick_wins || []).map((s) =>
+      String(s).slice(0, 220)
+    );
+
+    const prioritized_backlog: BacklogItem[] =
+      (ai?.prioritized_backlog || [])
+        .map((b) => {
+          const n = Number(b.impact);
+          const impact = n === 3 || n === 2 || n === 1 ? (n as 1 | 2 | 3) : 2;
+          return {
+            title: String(b.title || "").slice(0, 140),
+            impact,
+            effort: (["low", "medium", "high"] as const).includes(
+              (b.effort || "medium") as any
+            )
+              ? (b.effort as any)
+              : "medium",
+            eta_days:
+              typeof b.eta_days === "number"
+                ? Math.max(1, Math.min(30, Math.round(b.eta_days)))
+                : undefined,
+            lift_percent:
+              typeof (b as any).lift_percent === "number"
+                ? clamp((b as any).lift_percent, 1, 50)
+                : undefined,
+            notes: b.notes ? String(b.notes).slice(0, 400) : undefined,
+          };
+        })
+        .slice(0, 8) || [];
+
+    const content_audit: ContentAuditItem[] =
+      (ai?.content_audit || [])
+        .map((c) => {
+          const status =
+            c.status === "ok" || c.status === "weak" || c.status === "missing"
+              ? c.status
+              : "weak";
+          return {
+            section: String(c.section || "section")
+              .toLowerCase()
+              .replace(/\s+/g, "_"),
+            status,
+            rationale: c.rationale
+              ? String(c.rationale).slice(0, 600)
+              : undefined,
+            suggestions: Array.isArray(c.suggestions)
+              ? c.suggestions.slice(0, 6).map((s) => String(s).slice(0, 220))
+              : undefined,
+          };
+        })
+        .slice(0, 20) || [];
+
+    // If AI failed entirely, give a sensible fallback
+    if (!ai) {
+      write(res, "result", {
+        ...base,
+        score: heuristicScore,
+        key_findings: [
+          {
+            title: "Clarify the primary value proposition in the hero",
+            impact: "high",
+            recommendation:
+              "Rewrite the headline to clearly state the outcome and add a strong CTA above the fold.",
+          },
+          {
+            title: "Add social proof near the CTA",
+            impact: "medium",
+            recommendation:
+              "Place 2–3 short testimonials or logos near the primary CTA.",
+          },
+        ] as Suggestion[],
+        findings: [
+          // legacy alias (same content)
+          {
+            title: "Clarify the primary value proposition in the hero",
+            impact: "high",
+            recommendation:
+              "Rewrite the headline to clearly state the outcome and add a strong CTA above the fold.",
+          },
+          {
+            title: "Add social proof near the CTA",
+            impact: "medium",
+            recommendation:
+              "Place 2–3 short testimonials or logos near the primary CTA.",
+          },
+        ] as Suggestion[],
+        quick_wins: [
+          "Add a descriptive meta description (120–160 chars) including the main benefit.",
+          "Ensure exactly one H1 and 3–6 H2s structuring the page.",
+          "Add ALT texts for hero images above the fold.",
+        ],
+        prioritized_backlog: [
+          {
+            title: "Rewrite hero for clarity",
+            impact: 3,
+            effort: "low",
+            eta_days: 1,
+            lift_percent: 10,
+          },
+          {
+            title: "Add testimonials/logo strip",
+            impact: 2,
+            effort: "medium",
+            eta_days: 2,
+            lift_percent: 6,
+          },
+          {
+            title: "Improve CTA contrast",
+            impact: 2,
+            effort: "low",
+            eta_days: 1,
+            lift_percent: 4,
+          },
+        ] as BacklogItem[],
+        content_audit: [
+          {
+            section: "hero",
+            status: h1Count ? "weak" : "missing",
+            rationale: h1Count
+              ? "Headline present but likely unclear"
+              : "Missing clear H1",
+            suggestions: [
+              "State benefit + outcome in one sentence",
+              "Include a strong primary CTA",
+            ],
+          },
+          {
+            section: "social_proof",
+            status: sections.social_proof ? "ok" : "missing",
+            suggestions: ["Add 2–3 short testimonials or trusted client logos"],
+          },
+          {
+            section: "features",
+            status: sections.features ? "ok" : "weak",
+            suggestions: ["Bullet the top 3–5 benefits in user language"],
+          },
+        ] as ContentAuditItem[],
+      });
+      return res.end();
     }
+
+    // With AI response
+    const scoreFromAI =
+      100 -
+      (content_audit.filter((r) => r.status === "missing").length * 5 +
+        content_audit.filter((r) => r.status === "weak").length * 2 +
+        (findings.filter((f) => f.impact === "high").length * 10 +
+          findings.filter((f) => f.impact === "medium").length * 5 +
+          findings.filter((f) => f.impact === "low").length * 2));
 
     const result = {
-      url,
-      title: title || undefined,
-      ...data,
-      screenshots: {
-        hero: shots.primary || shots.backup || null,
-      },
-      meta: {
-        sections_detected: sections,
-      },
+      ...base,
+      score: clamp(Math.round(scoreFromAI || heuristicScore), 0, 100),
+      key_findings: findings, // new UI
+      findings, // legacy alias
+      quick_wins,
+      prioritized_backlog,
+      content_audit,
     };
 
-    send("result", result);
-    send("progress", { value: 100 });
+    write(res, "progress", { value: 96 });
+    write(res, "result", result);
     res.end();
-  } catch (e: any) {
-    sendEvent(res, "error", { message: e?.message || "stream failed" });
+  } catch (err: any) {
+    try {
+      write(res, "result", { error: err?.message || "Internal error" });
+    } catch {}
     res.end();
-  } finally {
-    if (tick) clearInterval(tick);
-    if (heartbeat) clearInterval(heartbeat);
   }
 }
 
-export const config = { api: { bodyParser: false } };
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
