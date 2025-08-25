@@ -51,11 +51,11 @@ type Report = {
   /** Backend copy ieteikumi — atbalstām vairākas shēmas + optional example */
   copy_suggestions?: Array<{
     field?: string;
-    current?: string; // esošais
-    recommended?: string; // ieteicamais (vadlīnija)
-    before?: string; // alternatīvs esošajam
-    after?: string; // alternatīvs ieteicamajam
-    example?: string; // JA backend jau atgriež piemēru — rādam 1:1
+    current?: string;
+    recommended?: string;
+    before?: string;
+    after?: string;
+    example?: string;
     priority?:
       | "low"
       | "med"
@@ -144,12 +144,10 @@ function buildCopySuggestionsFallback(r?: Report): string[] {
     out.push(
       "Add a concise subheadline for the target audience and pain point."
     );
-    out.push(
-      "Tighten the primary CTA copy (e.g., “Get your free audit” → “Get my free audit in 60s”)."
-    );
+    out.push("Tighten the primary CTA copy (e.g., “Get my plan in minutes”).");
   }
   if (!sd.social_proof)
-    out.push("Add 1–3 short testimonial snippets near the primary CTA.");
+    out.push("Add 1–3 testimonial snippets near the primary CTA.");
   if (!sd.features)
     out.push(
       "Turn features into short benefit bullets (start with a verb, <12 words)."
@@ -350,7 +348,6 @@ function toPriority(p: any): "low" | "med" | "high" {
 function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
   if (!r) return [];
 
-  // 1) dažādas backend formas
   const raw = r.copy_suggestions ?? r.copy?.suggestions ?? [];
 
   if (Array.isArray(raw) && raw.length) {
@@ -373,7 +370,7 @@ function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
     if (rows.length) return rows;
   }
 
-  // 2) fallback, ja backend neko nedod — ģenerējam pāris jēdzīgas rindas
+  // fallback
   const fallbackText = buildCopySuggestionsFallback(r);
   const metaDesc = r.meta?.description || (f?.meta?.description ?? "");
   const heroTitle = r.meta?.title || f?.meta?.title || "";
@@ -409,6 +406,112 @@ function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
     });
   }
   return rows;
+}
+
+/** ---------- Sekciju analīzes utilītas ---------- */
+const sectionOrder: Array<{
+  key: keyof SectionsDetected;
+  label: string;
+  match: RegExp;
+}> = [
+  { key: "hero", label: "Hero", match: /^hero$/i },
+  { key: "value_prop", label: "Value Prop", match: /^value[_\s-]?prop/i },
+  { key: "social_proof", label: "Social Proof", match: /^social[_\s-]?proof/i },
+  { key: "pricing", label: "Pricing", match: /^pricing/i },
+  { key: "features", label: "Features", match: /^features/i },
+  { key: "faq", label: "FAQ", match: /^faq$/i },
+  { key: "contact", label: "Contact", match: /^contact$/i },
+  { key: "footer", label: "Footer", match: /^footer$/i },
+];
+
+function findAuditFor(
+  audit: ContentAuditItem[] | undefined,
+  key: keyof SectionsDetected
+) {
+  if (!audit || !audit.length) return undefined;
+  const cfg = sectionOrder.find((s) => s.key === key);
+  if (!cfg) return undefined;
+  return audit.find((row) => cfg.match.test(row.section || ""));
+}
+
+function defaultSectionAdvice(key: keyof SectionsDetected): {
+  rationale: string;
+  suggestions: string[];
+} {
+  switch (key) {
+    case "hero":
+      return {
+        rationale:
+          "Ensure the hero communicates the main benefit with a clear CTA above the fold.",
+        suggestions: [
+          "Add a strong benefit headline",
+          "Include a primary CTA",
+          "Show trust signals near CTA",
+        ],
+      };
+    case "value_prop":
+      return {
+        rationale:
+          "Clarify what you offer and why it matters to this audience.",
+        suggestions: [
+          "Summarize 3–4 key benefits",
+          "Use short bullets",
+          "Avoid vague claims",
+        ],
+      };
+    case "social_proof":
+      return {
+        rationale: "Proof increases trust and conversions.",
+        suggestions: [
+          "Add 3–6 testimonials or client logos",
+          "Include roles or names where possible",
+        ],
+      };
+    case "pricing":
+      return {
+        rationale: "Transparent pricing reduces friction.",
+        suggestions: [
+          "Show “from …” price or plans",
+          "Link each price to a clear CTA",
+        ],
+      };
+    case "features":
+      return {
+        rationale: "Make features scannable and outcome-focused.",
+        suggestions: [
+          "Use bullets",
+          "Start each item with a verb",
+          "Tie features to benefits",
+        ],
+      };
+    case "faq":
+      return {
+        rationale: "FAQs address objections and improve time-on-page.",
+        suggestions: [
+          "Add 6–10 Q&A items",
+          "Start from common objections",
+          "Use collapsible layout",
+        ],
+      };
+    case "contact":
+      return {
+        rationale: "Easy contact boosts inquiries.",
+        suggestions: [
+          "Add a visible form or button",
+          "Provide phone/email prominently",
+        ],
+      };
+    case "footer":
+      return {
+        rationale: "Footer should contain essential links and trust cues.",
+        suggestions: [
+          "Add privacy/terms links",
+          "Include social links or address",
+        ],
+      };
+    default:
+      return { rationale: "", suggestions: [] };
+  }
 }
 
 /** -------------------------------- Komponents -------------------------------- */
@@ -575,6 +678,24 @@ export default function FullReportView() {
     }
   }
 
+  /** --------- Sekciju deep-dive dati --------- */
+  const sectionDeepDive = useMemo(() => {
+    const sd = report?.sections_detected || {};
+    const audit = report?.content_audit || [];
+
+    return sectionOrder.map(({ key, label }) => {
+      const detected = !!(sd as any)[key];
+      const row = findAuditFor(audit, key);
+      const status = row?.status || (detected ? "ok" : "missing");
+      const rationale = row?.rationale || defaultSectionAdvice(key).rationale;
+      const suggestions =
+        (row?.suggestions && row.suggestions.length
+          ? row.suggestions
+          : defaultSectionAdvice(key).suggestions) || [];
+      return { key, label, detected, status, rationale, suggestions };
+    });
+  }, [report]);
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* Controls */}
@@ -692,19 +813,10 @@ export default function FullReportView() {
             Sections Present
           </div>
           <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
-            {[
-              { k: "hero", label: "Hero" },
-              { k: "social_proof", label: "Social Proof" },
-              { k: "features", label: "Features" },
-              { k: "contact", label: "Contact" },
-              { k: "value_prop", label: "Value Prop" },
-              { k: "pricing", label: "Pricing" },
-              { k: "faq", label: "FAQ" },
-              { k: "footer", label: "Footer" },
-            ].map((it) => {
-              const ok = !!(report.sections_detected as any)?.[it.k];
+            {sectionOrder.map((it) => {
+              const ok = !!(report.sections_detected as any)?.[it.key];
               return (
-                <div key={it.k} className="flex items-center gap-2">
+                <div key={it.key} className="flex items-center gap-2">
                   <span
                     className={`h-2 w-2 rounded-full ${
                       ok ? "bg-emerald-500" : "bg-rose-500"
@@ -818,7 +930,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Copy suggestions — tabula ar reāla piemēra ģenerēšanu */}
+      {/* Copy suggestions — tabula + AI examples */}
       {report && (
         <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="text-sm font-medium text-slate-700">
@@ -970,6 +1082,56 @@ export default function FullReportView() {
                   <ul className="mt-2 list-disc pl-5 text-slate-700">
                     {(row.suggestions || []).map((s, j) => (
                       <li key={j}>{s}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- JAUNĀ sadaļa: Section deep-dives (visām “Sections Present”) ---------- */}
+      {report && (
+        <div className="rounded-2xl border bg-white p-5">
+          <div className="text-sm font-medium">Section Details</div>
+          <div className="mt-3 grid md:grid-cols-2 gap-3">
+            {sectionDeepDive.map((s) => (
+              <div key={s.key as string} className="rounded-lg border p-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium">{s.label}</div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={[
+                        "px-2 py-0.5 rounded text-xs border",
+                        s.detected
+                          ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                          : "bg-rose-100 text-rose-800 border-rose-200",
+                      ].join(" ")}
+                    >
+                      {s.detected ? "present" : "missing"}
+                    </span>
+                    <span
+                      className={[
+                        "px-2 py-0.5 rounded text-xs border",
+                        s.status === "ok"
+                          ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                          : s.status === "weak"
+                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                          : "bg-rose-100 text-rose-800 border-rose-200",
+                      ].join(" ")}
+                    >
+                      {s.status}
+                    </span>
+                  </div>
+                </div>
+                {s.rationale && (
+                  <div className="text-slate-700 mt-1">{s.rationale}</div>
+                )}
+                {s.suggestions && s.suggestions.length > 0 && (
+                  <ul className="mt-2 list-disc pl-5 text-slate-700">
+                    {s.suggestions.map((x, i) => (
+                      <li key={i}>{x}</li>
                     ))}
                   </ul>
                 )}
