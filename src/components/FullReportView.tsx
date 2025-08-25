@@ -708,11 +708,13 @@ export default function FullReportView() {
       const data = await res.json();
       if (!res.ok || !data?.ok)
         throw new Error(data?.error || "Failed to generate AI add-ons");
+      // ...iekš funkcijas augmentCopy, pēc fetch uz /api/copy-augment:
+
       const rows = (data.rows || []) as Array<{
         field?: string;
         current?: string;
         recommended?: string;
-        priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3;
+        priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3; // tips var palikt šāds
         lift_percent?: number;
       }>;
 
@@ -720,17 +722,12 @@ export default function FullReportView() {
         field: x.field || undefined,
         current: x.current || "Nav atrasts",
         recommended: x.recommended || "",
-        priority:
-          x.priority === 3 || x.priority === "high" || x.priority === "High"
-            ? "high"
-            : x.priority === 2 ||
-              x.priority === "medium" ||
-              x.priority === "med"
-            ? "med"
-            : "low",
+        // ✅ vietā, kur iepriekš salīdzināji ar "High"/"medium" u.c., izmantojam normalizētāju:
+        priority: toPriority(x.priority),
         liftPct:
           typeof x.lift_percent === "number" ? x.lift_percent : undefined,
       }));
+
       setAiRows(mapped);
     } catch (e: any) {
       setAiError(e?.message || "Generation failed");
