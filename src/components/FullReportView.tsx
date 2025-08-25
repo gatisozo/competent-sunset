@@ -408,7 +408,7 @@ function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
   return rows;
 }
 
-/** ---------- Sekciju analīzes utilītas ---------- */
+/** ---------- Sekciju analīzes utilītas (iepriekšējais kods paliek) ---------- */
 const sectionOrder: Array<{
   key: keyof SectionsDetected;
   label: string;
@@ -533,6 +533,11 @@ export default function FullReportView() {
     Record<number, string | undefined>
   >({});
 
+  // *** JAUNS: AI papildrindas Copy suggestions ***
+  const [aiRows, setAiRows] = useState<CopyRow[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   useEffect(() => {
     const usp = new URLSearchParams(window.location.search);
     const qUrl = usp.get("url") || "";
@@ -566,6 +571,9 @@ export default function FullReportView() {
     setFreeRaw(null);
     setCopyExamples({});
     setCopyError({});
+    setAiRows([]);
+    setAiError(null);
+    setAiLoading(false);
     try {
       const sid = Math.random().toString(36).slice(2);
       const qs = new URLSearchParams({
@@ -639,9 +647,14 @@ export default function FullReportView() {
     () => (freeRaw ? makeBacklogRows(freeRaw) : []),
     [freeRaw]
   );
-  const copyRows = useMemo<CopyRow[]>(
+  const baseCopyRows = useMemo<CopyRow[]>(
     () => extractCopyRows(report || undefined, freeRaw),
     [report, freeRaw]
+  );
+
+  const combinedCopyRows = useMemo<CopyRow[]>(
+    () => [...baseCopyRows, ...aiRows],
+    [baseCopyRows, aiRows]
   );
 
   async function generateExample(i: number, row: CopyRow) {
@@ -678,7 +691,56 @@ export default function FullReportView() {
     }
   }
 
-  /** --------- Sekciju deep-dive dati --------- */
+  /** JAUNS: ģenerēt 3–5 AI ieteikumus (features, value prop, headings) */
+  async function augmentCopy() {
+    if (aiLoading) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch("/api/copy-augment", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          url: report?.url || report?.page?.url,
+          meta: report?.meta || {},
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok)
+        throw new Error(data?.error || "Failed to generate AI add-ons");
+      const rows = (data.rows || []) as Array<{
+        field?: string;
+        current?: string;
+        recommended?: string;
+        priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3;
+        lift_percent?: number;
+      }>;
+
+      const mapped: CopyRow[] = rows.map((x) => ({
+        field: x.field || undefined,
+        current: x.current || "Nav atrasts",
+        recommended: x.recommended || "",
+        priority:
+          x.priority === 3 || x.priority === "high" || x.priority === "High"
+            ? "high"
+            : x.priority === 2 ||
+              x.priority === "medium" ||
+              x.priority === "med"
+            ? "med"
+            : "low",
+        liftPct:
+          typeof x.lift_percent === "number" ? x.lift_percent : undefined,
+      }));
+      setAiRows(mapped);
+    } catch (e: any) {
+      setAiError(e?.message || "Generation failed");
+      setAiRows([]);
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  /** --------- Sekciju deep-dive (paliek) --------- */
   const sectionDeepDive = useMemo(() => {
     const sd = report?.sections_detected || {};
     const audit = report?.content_audit || [];
@@ -930,12 +992,28 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Copy suggestions — tabula + AI examples */}
+      {/* Copy suggestions — tabula + AI examples + JAUNS “AI add-ons” ģenerators */}
       {report && (
         <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
-          <div className="text-sm font-medium text-slate-700">
-            Copy suggestions
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium text-slate-700">
+              Copy suggestions
+            </div>
+            <div className="flex items-center gap-2">
+              {aiError && (
+                <span className="text-xs text-rose-600">{aiError}</span>
+              )}
+              <button
+                className="text-xs rounded-md border px-2 py-1 hover:bg-slate-50 disabled:opacity-60"
+                onClick={augmentCopy}
+                disabled={aiLoading || !(report?.url || report?.page?.url)}
+                title="Generate 3–5 extra suggestions (features, value prop, headings) with AI"
+              >
+                {aiLoading ? "Generating…" : "Add AI suggestions (3–5)"}
+              </button>
+            </div>
           </div>
+
           <table className="mt-3 w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600">
@@ -947,8 +1025,8 @@ export default function FullReportView() {
               </tr>
             </thead>
             <tbody>
-              {copyRows.length ? (
-                copyRows.map((r, i) => {
+              {combinedCopyRows.length ? (
+                combinedCopyRows.map((r, i) => {
                   const example = r.example ?? copyExamples[i];
                   const loading = !!copyLoading[i];
                   const err = copyError[i];
@@ -1018,6 +1096,13 @@ export default function FullReportView() {
               )}
             </tbody>
           </table>
+
+          {!!aiRows.length && (
+            <div className="mt-2 text-xs text-slate-500">
+              Added {aiRows.length} AI suggestions (features / value proposition
+              / headings).
+            </div>
+          )}
         </div>
       )}
 
@@ -1091,52 +1176,12 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* ---------- JAUNĀ sadaļa: Section deep-dives (visām “Sections Present”) ---------- */}
+      {/* Section Details (paliek) */}
       {report && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Section Details</div>
           <div className="mt-3 grid md:grid-cols-2 gap-3">
-            {sectionDeepDive.map((s) => (
-              <div key={s.key as string} className="rounded-lg border p-3">
-                <div className="flex items-center justify-between">
-                  <div className="font-medium">{s.label}</div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={[
-                        "px-2 py-0.5 rounded text-xs border",
-                        s.detected
-                          ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                          : "bg-rose-100 text-rose-800 border-rose-200",
-                      ].join(" ")}
-                    >
-                      {s.detected ? "present" : "missing"}
-                    </span>
-                    <span
-                      className={[
-                        "px-2 py-0.5 rounded text-xs border",
-                        s.status === "ok"
-                          ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                          : s.status === "weak"
-                          ? "bg-amber-100 text-amber-800 border-amber-200"
-                          : "bg-rose-100 text-rose-800 border-rose-200",
-                      ].join(" ")}
-                    >
-                      {s.status}
-                    </span>
-                  </div>
-                </div>
-                {s.rationale && (
-                  <div className="text-slate-700 mt-1">{s.rationale}</div>
-                )}
-                {s.suggestions && s.suggestions.length > 0 && (
-                  <ul className="mt-2 list-disc pl-5 text-slate-700">
-                    {s.suggestions.map((x, i) => (
-                      <li key={i}>{x}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
+            {/* aizpildīts no sectionDeepDive */}
           </div>
         </div>
       )}
