@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { runAnalyze } from "../lib/analyzeClient";
 
-/** --- Kopējie tipi (vaļīgi, lai nesaplīstu ar esošo backend) --- */
+/** --- Kopējie tipi --- */
 type ImpactStr = "low" | "medium" | "high";
 type Suggestion = { title: string; impact: ImpactStr; recommendation: string };
 type BacklogItem = {
@@ -47,9 +47,41 @@ type Report = {
   prioritized_backlog?: BacklogItem[];
   content_audit?: ContentAuditItem[];
   meta?: { title?: string; description?: string; canonical?: string };
+
+  /** Backend copy ieteikumi — atbalstām vairākas shēmas */
+  copy_suggestions?: Array<{
+    field?: string;
+    current?: string; // “esošais”
+    recommended?: string; // “ieteicamais”
+    before?: string; // alternatīvs nosaukums esošajam
+    after?: string; // alternatīvs nosaukums ieteicamajam
+    priority?:
+      | "low"
+      | "med"
+      | "high"
+      | "medium"
+      | "Low"
+      | "Medium"
+      | "High"
+      | 1
+      | 2
+      | 3;
+    lift_percent?: number;
+  }>;
+  copy?: {
+    suggestions?: Array<{
+      field?: string;
+      current?: string;
+      recommended?: string;
+      before?: string;
+      after?: string;
+      priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3;
+      lift_percent?: number;
+    }>;
+  };
 };
 
-/** Free-report izejas datu forma + “sections”, lai varam salāgot ar Free report tabulām */
+/** Free report datu forma pārklājumam */
 type FreeData = {
   meta?: { title?: string; description?: string; canonical?: string };
   headings?: { h1?: number; h2?: number; h3?: number };
@@ -57,7 +89,7 @@ type FreeData = {
   robots?: { robotsTxt?: "ok" | "missing"; sitemapXml?: "ok" | "missing" };
   social?: { og?: boolean; twitter?: boolean };
   links?: { internal?: number; external?: number };
-  sections?: Partial<SectionsDetected>; // <-- pievienots, lai TS nekliegtu
+  sections?: Partial<SectionsDetected>;
   quick_wins_rows?: QuickWinRow[];
   backlog_rows?: BacklogRow[];
 };
@@ -82,15 +114,6 @@ function screenshotFallback(target?: string) {
   const url = normalizeUrl(target);
   return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
 }
-function impactBadgeClasses(impact?: BacklogItem["impact"]) {
-  if (impact === 3 || impact === "high")
-    return "bg-rose-100 text-rose-800 border-rose-200";
-  if (impact === 2 || impact === "medium")
-    return "bg-amber-100 text-amber-800 border-amber-200";
-  if (impact === 1 || impact === "low")
-    return "bg-emerald-100 text-emerald-800 border-emerald-200";
-  return "bg-amber-100 text-amber-800 border-amber-200";
-}
 function toImpactLabel(impact?: BacklogItem["impact"]) {
   if (impact === 3) return "high";
   if (impact === 2) return "medium";
@@ -100,8 +123,8 @@ function toImpactLabel(impact?: BacklogItem["impact"]) {
   return "medium";
 }
 
-/** ---------- Copy suggestions no audit/sections (front-end heuristika) ---------- */
-function buildCopySuggestions(r?: Report): string[] {
+/** ---------- Copy suggestions heuristiskais (fallback) ---------- */
+function buildCopySuggestionsFallback(r?: Report): string[] {
   if (!r) return [];
   const out: string[] = [];
   const sd = r.sections_detected || {};
@@ -139,7 +162,7 @@ function buildCopySuggestions(r?: Report): string[] {
   return Array.from(new Set(out)).slice(0, 10);
 }
 
-/** ---------- Tabulu rindas (tāda pati struktūra kā Free report) ---------- */
+/** ---------- Tabulu rindas (tādas pašas kā Free report) ---------- */
 type QuickWinRow = {
   field: string;
   current: string;
@@ -154,9 +177,14 @@ type BacklogRow = {
   effort: string;
   liftPct?: number;
 };
+type CopyRow = {
+  field?: string;
+  current: string;
+  recommended: string;
+  priority: "low" | "med" | "high";
+  liftPct?: number;
+};
 
-/** Ja Free report jau atdod gatavas rindas – izmantojam tās.
- *  Ja nē, ģenerējam tās pašas rindas šeit no FreeData (meta/headings/images/..). */
 function makeQuickWinsRows(f: FreeData): QuickWinRow[] {
   if (Array.isArray(f.quick_wins_rows) && f.quick_wins_rows.length)
     return f.quick_wins_rows;
@@ -305,6 +333,77 @@ function makeBacklogRows(f: FreeData): BacklogRow[] {
   return rows;
 }
 
+/** --------- Copy suggestions: ņemam no backend, ar fallback, un rādam TABULU --------- */
+function toPriority(p: any): "low" | "med" | "high" {
+  if (p === 3 || String(p).toLowerCase() === "high") return "high";
+  if (
+    p === 2 ||
+    String(p).toLowerCase() === "medium" ||
+    String(p).toLowerCase() === "med"
+  )
+    return "med";
+  return "low";
+}
+function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
+  if (!r) return [];
+
+  // 1) dažādas backend formas
+  const raw = r.copy_suggestions ?? r.copy?.suggestions ?? [];
+
+  if (Array.isArray(raw) && raw.length) {
+    const rows: CopyRow[] = raw
+      .map((x: any): CopyRow | null => {
+        const current = (x.current ?? x.before ?? "").toString().trim();
+        const recommended = (x.recommended ?? x.after ?? "").toString().trim();
+        const field = x.field ? String(x.field) : undefined;
+        const priority = toPriority(x.priority);
+        const liftPct =
+          typeof x.lift_percent === "number" ? x.lift_percent : undefined;
+        if (!current && !recommended) return null;
+        return { field, current, recommended, priority, liftPct };
+      })
+      .filter(Boolean) as CopyRow[];
+    if (rows.length) return rows;
+  }
+
+  // 2) fallback, ja backend neko nedod — ģenerējam pāris jēdzīgas rindas
+  const fallbackText = buildCopySuggestionsFallback(r);
+  const metaDesc = r.meta?.description || (f?.meta?.description ?? "");
+  const heroTitle = r.meta?.title || f?.meta?.title || "";
+
+  const rows: CopyRow[] = [];
+  if (heroTitle) {
+    rows.push({
+      field: "Hero headline",
+      current: heroTitle,
+      recommended: "Explicit benefit + outcome. Add strong verb and target.",
+      priority: "high",
+      liftPct: 8,
+    });
+  }
+  if (metaDesc) {
+    rows.push({
+      field: "Meta description",
+      current: metaDesc,
+      recommended:
+        "≈145–160 chars: benefit + brand + CTA (e.g., “Get started in minutes”).",
+      priority: "med",
+      liftPct: 2,
+    });
+  }
+  if (fallbackText.length) {
+    rows.push({
+      field: "CTA copy",
+      current: "Generic CTA (e.g., “Send” / “Submit”).",
+      recommended:
+        "Outcome-driven CTA (e.g., “Get my plan” / “Book my consultation”).",
+      priority: "med",
+      liftPct: 3,
+    });
+  }
+  return rows;
+}
+
 /** -------------------------------- Komponents -------------------------------- */
 export default function FullReportView() {
   const [url, setUrl] = useState("");
@@ -313,11 +412,10 @@ export default function FullReportView() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Free report datu “overlay”, lai tabulas sakristu ar Free report
+  // Free report datu “overlay”, lai Quick Wins/Prioritized Backlog sakristu ar Free report
   const [freeRaw, setFreeRaw] = useState<FreeData | null>(null);
   const [overlayLoading, setOverlayLoading] = useState(false);
 
-  // ?url & autostart
   useEffect(() => {
     const usp = new URLSearchParams(window.location.search);
     const qUrl = usp.get("url") || "";
@@ -331,7 +429,7 @@ export default function FullReportView() {
     if (!final) return;
     setOverlayLoading(true);
     try {
-      const rr = await runAnalyze(final); // tas pats, ko izmanto Free report
+      const rr = await runAnalyze(final);
       if (rr?.ok && rr.data) setFreeRaw(rr.data as FreeData);
       else setFreeRaw(null);
     } catch {
@@ -361,9 +459,8 @@ export default function FullReportView() {
       es.addEventListener("progress", (ev: any) => {
         try {
           const d = JSON.parse(ev.data);
-          if (typeof d?.value === "number") {
+          if (typeof d?.value === "number")
             setProgress((v) => Math.max(v, clamp(d.value, 0, 100)));
-          }
         } catch {}
       });
 
@@ -415,12 +512,6 @@ export default function FullReportView() {
     ) as Suggestion[];
   }, [report]);
 
-  const copySuggestions = useMemo(
-    () => buildCopySuggestions(report || undefined),
-    [report]
-  );
-
-  // Tabulām izmantojam Free report datus (vai ģenerējam no tiem)
   const quickRows = useMemo<QuickWinRow[]>(
     () => (freeRaw ? makeQuickWinsRows(freeRaw) : []),
     [freeRaw]
@@ -428,6 +519,11 @@ export default function FullReportView() {
   const backlogRows = useMemo<BacklogRow[]>(
     () => (freeRaw ? makeBacklogRows(freeRaw) : []),
     [freeRaw]
+  );
+
+  const copyRows = useMemo<CopyRow[]>(
+    () => extractCopyRows(report || undefined, freeRaw),
+    [report, freeRaw]
   );
 
   return (
@@ -573,7 +669,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Quick Wins — TABULA kā Free report */}
+      {/* Quick Wins — tabula (no Free report) */}
       {report && (
         <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="flex items-center justify-between">
@@ -617,7 +713,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Prioritized Backlog — TABULA kā Free report */}
+      {/* Prioritized Backlog — tabula (no Free report) */}
       {report && (
         <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="text-sm font-medium text-slate-700">
@@ -674,25 +770,61 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Copy suggestions */}
+      {/* Copy suggestions — TABULA no backend, ar fallback */}
       {report && (
-        <div className="rounded-2xl border bg-white p-5">
+        <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="text-sm font-medium text-slate-700">
             Copy suggestions
           </div>
-          <ul className="mt-2 list-disc pl-5 text-sm text-slate-700">
-            {buildCopySuggestions(report)?.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
-          </ul>
-          {report.meta?.description && (
-            <div className="mt-3 rounded-lg border p-3 bg-slate-50 text-sm">
-              <div className="text-xs text-slate-500 mb-1">
-                Current meta description
-              </div>
-              <div className="text-slate-700">{report.meta.description}</div>
-            </div>
-          )}
+          <table className="mt-3 w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-50 text-slate-600">
+                <th className="text-left p-2 border">Lauks</th>
+                <th className="text-left p-2 border">Esošais copy</th>
+                <th className="text-left p-2 border">Ieteicamais copy</th>
+                <th className="text-left p-2 border">Prioritāte</th>
+                <th className="text-left p-2 border">Potenciālais ieguvums</th>
+              </tr>
+            </thead>
+            <tbody>
+              {copyRows.length ? (
+                copyRows.map((r, i) => (
+                  <tr key={i} className="align-top">
+                    <td className="p-2 border whitespace-nowrap">
+                      {r.field || "—"}
+                    </td>
+                    <td className="p-2 border">{r.current}</td>
+                    <td className="p-2 border">{r.recommended}</td>
+                    <td className="p-2 border">
+                      <span
+                        className={[
+                          "px-2 py-0.5 rounded text-xs border",
+                          r.priority === "high"
+                            ? "bg-rose-100 text-rose-800 border-rose-200"
+                            : r.priority === "med"
+                            ? "bg-amber-100 text-amber-800 border-amber-200"
+                            : "bg-emerald-100 text-emerald-800 border-emerald-200",
+                        ].join(" ")}
+                      >
+                        {r.priority}
+                      </span>
+                    </td>
+                    <td className="p-2 border whitespace-nowrap">
+                      {typeof r.liftPct === "number"
+                        ? `≈ +${r.liftPct}% leads`
+                        : "—"}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="p-2 text-slate-500 border">
+                    No backend copy suggestions found. Showing once available.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
