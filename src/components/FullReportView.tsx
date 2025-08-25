@@ -49,7 +49,7 @@ type Report = {
   meta?: { title?: string; description?: string; canonical?: string };
 };
 
-/** Free-report izejas datu “aptuvenā” forma */
+/** Free-report izejas datu forma + “sections”, lai varam salāgot ar Free report tabulām */
 type FreeData = {
   meta?: { title?: string; description?: string; canonical?: string };
   headings?: { h1?: number; h2?: number; h3?: number };
@@ -57,7 +57,7 @@ type FreeData = {
   robots?: { robotsTxt?: "ok" | "missing"; sitemapXml?: "ok" | "missing" };
   social?: { og?: boolean; twitter?: boolean };
   links?: { internal?: number; external?: number };
-  // ja free report jau iedod gatavus laukus:
+  sections?: Partial<SectionsDetected>; // <-- pievienots, lai TS nekliegtu
   quick_wins_rows?: QuickWinRow[];
   backlog_rows?: BacklogRow[];
 };
@@ -151,7 +151,7 @@ type BacklogRow = {
   current: string;
   recommended: string;
   priority: "low" | "med" | "high";
-  effort: string; // piemēram "1–2h", "1–2d" u.tml.
+  effort: string;
   liftPct?: number;
 };
 
@@ -165,6 +165,7 @@ function makeQuickWinsRows(f: FreeData): QuickWinRow[] {
   const h1 = f.headings?.h1 ?? 0;
   const desc = (f.meta?.description || "").trim();
   const missingAlt = f.images?.missingAlt ?? 0;
+  const total = f.images?.total ?? 0;
   const internalLinks = f.links?.internal ?? 0;
 
   rows.push({
@@ -184,11 +185,9 @@ function makeQuickWinsRows(f: FreeData): QuickWinRow[] {
     field: "Image ALT texts",
     current:
       missingAlt > 0
-        ? `Trūkst: ${missingAlt} (${
-            f.images?.total
-              ? Math.round((missingAlt / (f.images?.total || 1)) * 100)
-              : "~"
-          }%)`
+        ? `Trūkst: ${missingAlt}${
+            total ? ` (${Math.round((missingAlt / total) * 100)}%)` : ""
+          }`
         : "OK",
     recommended: 'Add short, descriptive ALT; decorative images use alt="".',
     liftPct: 2,
@@ -280,11 +279,7 @@ function makeBacklogRows(f: FreeData): BacklogRow[] {
     },
     {
       task: "Pricing/Plans sadaļa",
-      current: f.sections
-        ? (f as any).sections?.pricing
-          ? "Atrasta"
-          : "Nav atrasta"
-        : "—",
+      current: f.sections?.pricing ? "Atrasta" : "Nav atrasta",
       recommended: "Add a clear plan / “from …” pricing with CTA.",
       priority: "med",
       effort: "1–2d",
@@ -292,11 +287,7 @@ function makeBacklogRows(f: FreeData): BacklogRow[] {
     },
     {
       task: "FAQ sadaļa",
-      current: f.sections
-        ? (f as any).sections?.faq
-          ? "Atrasta"
-          : "Nav atrasta"
-        : "—",
+      current: f.sections?.faq ? "Atrasta" : "Nav atrasta",
       recommended: "Add 6–10 FAQs with short answers.",
       priority: "med",
       effort: "0.5–1d",
@@ -304,7 +295,7 @@ function makeBacklogRows(f: FreeData): BacklogRow[] {
     },
     {
       task: "Testimonials/Logos",
-      current: (f as any)?.sections?.social_proof ? "Atrasti" : "Nav atrasti",
+      current: f.sections?.social_proof ? "Atrasti" : "Nav atrasti",
       recommended: "Add quotes or client logos row (≥6).",
       priority: "high",
       effort: "1–2d",
@@ -690,13 +681,9 @@ export default function FullReportView() {
             Copy suggestions
           </div>
           <ul className="mt-2 list-disc pl-5 text-sm text-slate-700">
-            {copySuggestions.length
-              ? copySuggestions.map((s, i) => <li key={i}>{s}</li>)
-              : [
-                  "Rewrite the hero headline to clearly state the main benefit and add a compelling CTA.",
-                  "Add 2–3 short testimonials or client logos near the primary CTA.",
-                  "Rewrite features into concise benefit bullets (under 12 words each).",
-                ].map((s, i) => <li key={i}>{s}</li>)}
+            {buildCopySuggestions(report)?.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
           </ul>
           {report.meta?.description && (
             <div className="mt-3 rounded-lg border p-3 bg-slate-50 text-sm">
