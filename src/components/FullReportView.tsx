@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { runAnalyze } from "../lib/analyzeClient";
 
 // ---- Types kept flexible for safety with current backend ----
 type ImpactStr = "low" | "medium" | "high";
@@ -168,6 +169,13 @@ export default function FullReportView() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // NEW: overlay from Free report so Quick Wins & Backlog match exactly
+  const [freeOverlay, setFreeOverlay] = useState<{
+    quick_wins?: string[];
+    prioritized_backlog?: BacklogItem[];
+  } | null>(null);
+  const [overlayLoading, setOverlayLoading] = useState(false);
+
   // Read ?url= and autostart
   useEffect(() => {
     const usp = new URLSearchParams(window.location.search);
@@ -179,6 +187,31 @@ export default function FullReportView() {
     }
   }, []);
 
+  // After SSE completes, fetch Free report for same URL and overlay
+  async function hydrateFromFree(targetUrl?: string) {
+    const final = (targetUrl || report?.url || report?.page?.url || "").trim();
+    if (!final) return;
+    setOverlayLoading(true);
+    try {
+      const rr = await runAnalyze(final);
+      if (rr?.ok && rr.data) {
+        const qw = Array.isArray(rr.data.quick_wins)
+          ? rr.data.quick_wins
+          : undefined;
+        const pb = Array.isArray(rr.data.prioritized_backlog)
+          ? rr.data.prioritized_backlog
+          : undefined;
+        setFreeOverlay({ quick_wins: qw, prioritized_backlog: pb });
+      } else {
+        setFreeOverlay(null);
+      }
+    } catch {
+      setFreeOverlay(null);
+    } finally {
+      setOverlayLoading(false);
+    }
+  }
+
   // SSE runner
   async function startAnalysis(raw: string) {
     const target = raw.trim();
@@ -187,6 +220,7 @@ export default function FullReportView() {
     setError(null);
     setProgress(5);
     setStarting(true);
+    setFreeOverlay(null);
     try {
       const sid = Math.random().toString(36).slice(2);
       const qs = new URLSearchParams({
@@ -215,6 +249,8 @@ export default function FullReportView() {
           } else {
             setReport(d as Report);
             setProgress(100);
+            // Immediately overlay Quick Wins & Backlog from Free report endpoint
+            void hydrateFromFree(d?.url || d?.page?.url);
           }
         } catch (e: any) {
           setError(e?.message || "Failed to parse result");
@@ -258,6 +294,27 @@ export default function FullReportView() {
     [report]
   );
 
+  // Quick Wins & Backlog: prefer Free-overlay → else Full report data → else defaults
+  const quickWinsToShow: string[] = useMemo(() => {
+    if (freeOverlay?.quick_wins && freeOverlay.quick_wins.length > 0)
+      return freeOverlay.quick_wins;
+    if (report?.quick_wins && report.quick_wins.length > 0)
+      return report.quick_wins;
+    return [
+      "Improve CTA visibility and clarity above the fold.",
+      "Add testimonials near the primary CTA for immediate social proof.",
+    ];
+  }, [freeOverlay, report]);
+
+  const backlogToShow: BacklogItem[] = useMemo(() => {
+    if (
+      freeOverlay?.prioritized_backlog &&
+      freeOverlay.prioritized_backlog.length > 0
+    )
+      return freeOverlay.prioritized_backlog;
+    return report?.prioritized_backlog || [];
+  }, [freeOverlay, report]);
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* Controls */}
@@ -278,7 +335,10 @@ export default function FullReportView() {
         >
           {starting ? "Analyzing…" : "Run Full Audit"}
         </button>
-        <div className="text-xs text-slate-500">SSE live analysis</div>
+        <div className="text-xs text-slate-500">
+          SSE live analysis{" "}
+          {overlayLoading ? "· syncing with Free report…" : ""}
+        </div>
       </div>
 
       {(starting || progress > 0) && (
@@ -399,37 +459,31 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* ============ Quick Wins (same style as Free) ============ */}
+      {/* ============ Quick Wins (synced with Free) ============ */}
       {report && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-slate-700">Quick Wins</div>
             <div className="text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5">
-              ≈ +9% leads (if all done)
+              ≈ +9% leads {overlayLoading ? "· syncing…" : "(from Free report)"}
             </div>
           </div>
           <ul className="mt-3 list-disc pl-5 text-sm text-slate-700">
-            {(report.quick_wins && report.quick_wins.length > 0
-              ? report.quick_wins
-              : [
-                  "Improve CTA visibility and clarity above the fold.",
-                  "Add testimonials near the primary CTA for immediate social proof.",
-                ]
-            ).map((w, i) => (
+            {quickWinsToShow.map((w, i) => (
               <li key={i}>{w}</li>
             ))}
           </ul>
         </div>
       )}
 
-      {/* ============ Prioritized Backlog (same style as Free) ============ */}
+      {/* ============ Prioritized Backlog (synced with Free) ============ */}
       {report && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium text-slate-700">
             Prioritized Backlog
           </div>
           <div className="mt-3 space-y-2 text-sm">
-            {(report.prioritized_backlog || []).map((b, i) => (
+            {backlogToShow.map((b, i) => (
               <div
                 key={i}
                 className="rounded-lg border px-3 py-2 flex items-center justify-between"
@@ -459,7 +513,7 @@ export default function FullReportView() {
                 </div>
               </div>
             ))}
-            {(report.prioritized_backlog || []).length === 0 && (
+            {backlogToShow.length === 0 && (
               <div className="text-slate-500 text-sm">No backlog items.</div>
             )}
           </div>
