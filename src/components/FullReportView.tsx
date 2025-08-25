@@ -370,12 +370,15 @@ function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
     if (rows.length) return rows;
   }
 
-  // fallback
-  const fallbackText = buildCopySuggestionsFallback(r);
+  // ---------- fallback ar bagātīgāku saturu (3–5+ rindas) ----------
+  const sd = r.sections_detected || {};
   const metaDesc = r.meta?.description || (f?.meta?.description ?? "");
   const heroTitle = r.meta?.title || f?.meta?.title || "";
+  const h2 = f?.headings?.h2 ?? 0;
+  const h3 = f?.headings?.h3 ?? 0;
 
   const rows: CopyRow[] = [];
+
   if (heroTitle) {
     rows.push({
       field: "Hero headline",
@@ -395,20 +398,78 @@ function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
       liftPct: 2,
     });
   }
-  if (fallbackText.length) {
+  // CTA — vienmēr noder, ja jau vajag vairāk rindu
+  rows.push({
+    field: "CTA copy",
+    current: "Generic CTA (e.g., “Send” / “Submit”).",
+    recommended:
+      "Outcome-driven CTA (e.g., “Get my plan” / “Book my consultation”).",
+    priority: "med",
+    liftPct: 3,
+  });
+
+  // Value proposition
+  rows.push({
+    field: "Value proposition",
+    current: heroTitle || "Nav atrasts",
+    recommended:
+      "One-sentence value prop: Who it’s for + key benefit + outcome timeframe.",
+    priority: "high",
+    liftPct: 4,
+  });
+
+  // Features bullets (ja nav features sekcijas)
+  if (!sd.features) {
     rows.push({
-      field: "CTA copy",
-      current: "Generic CTA (e.g., “Send” / “Submit”).",
+      field: "Features bullets",
+      current: "Features section missing",
       recommended:
-        "Outcome-driven CTA (e.g., “Get my plan” / “Book my consultation”).",
+        "Create 4–6 short bullets; start with a verb and tie to benefits.",
       priority: "med",
       liftPct: 3,
     });
   }
-  return rows;
+
+  // Headings (H2/H3)
+  if ((h2 ?? 0) + (h3 ?? 0) < 3) {
+    rows.push({
+      field: "Headings (H2/H3)",
+      current: `Found H2: ${h2 || 0} · H3: ${h3 || 0}`,
+      recommended:
+        "Add descriptive H2/H3 headings for each section; include benefit keywords.",
+      priority: "low",
+      liftPct: 1,
+    });
+  }
+
+  // Testimonials / Social proof (ja nav)
+  if (!sd.social_proof) {
+    rows.push({
+      field: "Testimonials snippet",
+      current: "No testimonials/logos",
+      recommended:
+        "Add 1–2 short quotes with names/roles; a logos row (≥6) near the CTA.",
+      priority: "high",
+      liftPct: 6,
+    });
+  }
+
+  // Pricing (ja nav)
+  if (!sd.pricing) {
+    rows.push({
+      field: "Pricing blurb",
+      current: "Pricing section missing",
+      recommended:
+        "Add a simple “from …” price line and link to a plan comparison CTA.",
+      priority: "med",
+      liftPct: 4,
+    });
+  }
+
+  return rows.slice(0, 8);
 }
 
-/** ---------- Sekciju analīzes utilītas (iepriekšējais kods paliek) ---------- */
+/** ---------- Sekciju analīzes utilītas ---------- */
 const sectionOrder: Array<{
   key: keyof SectionsDetected;
   label: string;
@@ -533,7 +594,7 @@ export default function FullReportView() {
     Record<number, string | undefined>
   >({});
 
-  // *** JAUNS: AI papildrindas Copy suggestions ***
+  // AI papildrindas Copy suggestions
   const [aiRows, setAiRows] = useState<CopyRow[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -691,7 +752,7 @@ export default function FullReportView() {
     }
   }
 
-  /** JAUNS: ģenerēt 3–5 AI ieteikumus (features, value prop, headings) */
+  /** Ģenerēt 3–5 AI ieteikumus (features, value prop, headings) */
   async function augmentCopy() {
     if (aiLoading) return;
     setAiLoading(true);
@@ -708,13 +769,12 @@ export default function FullReportView() {
       const data = await res.json();
       if (!res.ok || !data?.ok)
         throw new Error(data?.error || "Failed to generate AI add-ons");
-      // ...iekš funkcijas augmentCopy, pēc fetch uz /api/copy-augment:
 
       const rows = (data.rows || []) as Array<{
         field?: string;
         current?: string;
         recommended?: string;
-        priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3; // tips var palikt šāds
+        priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3;
         lift_percent?: number;
       }>;
 
@@ -722,7 +782,6 @@ export default function FullReportView() {
         field: x.field || undefined,
         current: x.current || "Nav atrasts",
         recommended: x.recommended || "",
-        // ✅ vietā, kur iepriekš salīdzināji ar "High"/"medium" u.c., izmantojam normalizētāju:
         priority: toPriority(x.priority),
         liftPct:
           typeof x.lift_percent === "number" ? x.lift_percent : undefined,
@@ -737,7 +796,7 @@ export default function FullReportView() {
     }
   }
 
-  /** --------- Sekciju deep-dive (paliek) --------- */
+  /** --------- Sekciju deep-dive --------- */
   const sectionDeepDive = useMemo(() => {
     const sd = report?.sections_detected || {};
     const audit = report?.content_audit || [];
@@ -989,7 +1048,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Copy suggestions — tabula + AI examples + JAUNS “AI add-ons” ģenerators */}
+      {/* Copy suggestions — tabula + AI examples */}
       {report && (
         <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="flex items-center justify-between">
@@ -1104,14 +1163,11 @@ export default function FullReportView() {
       )}
 
       {/* Findings */}
-      {report && (report.key_findings?.length || report.findings?.length) ? (
+      {report && (findings || []).length ? (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Findings</div>
           <div className="mt-2 space-y-3">
-            {(report.key_findings && report.key_findings.length > 0
-              ? report.key_findings
-              : report.findings || []
-            ).map((f, i) => (
+            {(findings || []).map((f, i) => (
               <div key={i} className="rounded-lg border p-3">
                 <div className="flex items-center justify-between">
                   <div className="font-medium">{f.title}</div>
@@ -1173,12 +1229,40 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Section Details (paliek) */}
+      {/* Section Details — AIZPILDĪTS */}
       {report && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Section Details</div>
           <div className="mt-3 grid md:grid-cols-2 gap-3">
-            {/* aizpildīts no sectionDeepDive */}
+            {sectionDeepDive.map((sec) => (
+              <div key={String(sec.key)} className="rounded-lg border p-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium">{sec.label}</div>
+                  <span
+                    className={[
+                      "px-2 py-0.5 rounded text-xs border",
+                      sec.status === "ok"
+                        ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                        : sec.status === "weak"
+                        ? "bg-amber-100 text-amber-800 border-amber-200"
+                        : "bg-rose-100 text-rose-800 border-rose-200",
+                    ].join(" ")}
+                  >
+                    {sec.status}
+                  </span>
+                </div>
+                {sec.rationale && (
+                  <div className="text-slate-700 mt-1">{sec.rationale}</div>
+                )}
+                {(sec.suggestions || []).length > 0 && (
+                  <ul className="mt-2 list-disc pl-5 text-slate-700">
+                    {(sec.suggestions || []).map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
