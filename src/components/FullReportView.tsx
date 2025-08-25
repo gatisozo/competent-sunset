@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { runAnalyze } from "../lib/analyzeClient";
 
-// ---- Types kept flexible for safety with current backend ----
+/** --- Kopējie tipi (vaļīgi, lai nesaplīstu ar esošo backend) --- */
 type ImpactStr = "low" | "medium" | "high";
 type Suggestion = { title: string; impact: ImpactStr; recommendation: string };
 type BacklogItem = {
@@ -34,28 +34,37 @@ type Report = {
   url?: string;
   title?: string;
   score?: number;
-  // legacy mirrors
   page?: { url?: string; title?: string };
   assets?: {
     screenshot_url?: string | null;
     suggested_screenshot_url?: string | null;
   };
-  // new
   screenshots?: { hero?: string | null };
   sections_detected?: SectionsDetected;
-  key_findings?: Suggestion[]; // sometimes used instead of findings
+  key_findings?: Suggestion[];
   findings?: Suggestion[];
   quick_wins?: string[];
   prioritized_backlog?: BacklogItem[];
   content_audit?: ContentAuditItem[];
-  // optional extras if backend provides them
   meta?: { title?: string; description?: string; canonical?: string };
+};
+
+/** Free-report izejas datu “aptuvenā” forma */
+type FreeData = {
+  meta?: { title?: string; description?: string; canonical?: string };
+  headings?: { h1?: number; h2?: number; h3?: number };
+  images?: { total?: number; missingAlt?: number };
+  robots?: { robotsTxt?: "ok" | "missing"; sitemapXml?: "ok" | "missing" };
+  social?: { og?: boolean; twitter?: boolean };
+  links?: { internal?: number; external?: number };
+  // ja free report jau iedod gatavus laukus:
+  quick_wins_rows?: QuickWinRow[];
+  backlog_rows?: BacklogRow[];
 };
 
 function clamp(n: number, lo = 0, hi = 100) {
   return Math.max(lo, Math.min(hi, n));
 }
-
 function normalizeUrl(input: string): string {
   let s = (input || "").trim();
   if (!s) return s;
@@ -68,14 +77,11 @@ function normalizeUrl(input: string): string {
     return s;
   }
 }
-
 function screenshotFallback(target?: string) {
   if (!target) return undefined;
   const url = normalizeUrl(target);
-  // use same public fallback as Free report, unless backend provided one
   return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=1200`;
 }
-
 function impactBadgeClasses(impact?: BacklogItem["impact"]) {
   if (impact === 3 || impact === "high")
     return "bg-rose-100 text-rose-800 border-rose-200";
@@ -83,10 +89,8 @@ function impactBadgeClasses(impact?: BacklogItem["impact"]) {
     return "bg-amber-100 text-amber-800 border-amber-200";
   if (impact === 1 || impact === "low")
     return "bg-emerald-100 text-emerald-800 border-emerald-200";
-  // default medium
   return "bg-amber-100 text-amber-800 border-amber-200";
 }
-
 function toImpactLabel(impact?: BacklogItem["impact"]) {
   if (impact === 3) return "high";
   if (impact === 2) return "medium";
@@ -96,7 +100,7 @@ function toImpactLabel(impact?: BacklogItem["impact"]) {
   return "medium";
 }
 
-// Heuristic “copy” suggestions derived from audit/sections; backend changes NOT required
+/** ---------- Copy suggestions no audit/sections (front-end heuristika) ---------- */
 function buildCopySuggestions(r?: Report): string[] {
   if (!r) return [];
   const out: string[] = [];
@@ -104,64 +108,213 @@ function buildCopySuggestions(r?: Report): string[] {
   const audit = r.content_audit || [];
   const metaDesc = r.meta?.description;
 
-  // Hero / value prop
-  const heroRow = audit.find((a) => a.section.includes("hero"));
+  const heroRow = audit.find((a) => a.section.toLowerCase().includes("hero"));
   if (
     !sd.hero ||
     (heroRow && (heroRow.status === "weak" || heroRow.status === "missing"))
   ) {
     out.push(
-      "Rewrite the hero headline to clearly state the value proposition and outcome in one sentence."
+      "Rewrite the hero headline to clearly state the main benefit and outcome in one sentence."
     );
     out.push(
-      "Add a concise subheadline that addresses the target audience and their pain point."
+      "Add a concise subheadline for the target audience and pain point."
     );
     out.push(
       "Tighten the primary CTA copy (e.g., “Get your free audit” → “Get my free audit in 60s”)."
     );
   }
-
-  // Social proof microcopy
-  if (!sd.social_proof) {
+  if (!sd.social_proof)
+    out.push("Add 1–3 short testimonial snippets near the primary CTA.");
+  if (!sd.features)
     out.push(
-      "Add 1–3 short testimonial snippets (one sentence each) near the primary CTA to reduce risk."
+      "Turn features into short benefit bullets (start with a verb, <12 words)."
     );
-  }
-
-  // Features / benefits
-  if (!sd.features) {
-    out.push(
-      "Rewrite features into user-benefit bullets (start each with a verb, keep under 12 words)."
-    );
-  }
-
-  // Meta description (if present or missing)
-  if (metaDesc && metaDesc.length < 120) {
-    out.push(
-      "Expand the meta description to ~150 chars including the primary benefit and CTA phrase."
-    );
-  } else if (!metaDesc) {
-    out.push(
-      "Add a descriptive meta description (~120–160 chars) with your main benefit and CTA."
-    );
-  }
-
-  // Pricing/FAQ
-  if (!sd.pricing) {
-    out.push(
-      "Clarify pricing or add a “from …” statement to set expectations and reduce friction."
-    );
-  }
-  if (!sd.faq) {
-    out.push(
-      "Add 3–5 short FAQs that tackle common objections (pricing, timelines, guarantees)."
-    );
-  }
-
-  // Deduplicate similar lines
+  if (metaDesc && metaDesc.length < 120)
+    out.push("Expand meta description to ~150 chars incl. benefit + CTA.");
+  else if (!metaDesc)
+    out.push("Add meta description (~120–160 chars) with main benefit + CTA.");
+  if (!sd.pricing)
+    out.push("Clarify pricing or add “from …” line to set expectations.");
+  if (!sd.faq) out.push("Add 3–5 FAQs that address common objections.");
   return Array.from(new Set(out)).slice(0, 10);
 }
 
+/** ---------- Tabulu rindas (tāda pati struktūra kā Free report) ---------- */
+type QuickWinRow = {
+  field: string;
+  current: string;
+  recommended: string;
+  liftPct?: number;
+};
+type BacklogRow = {
+  task: string;
+  current: string;
+  recommended: string;
+  priority: "low" | "med" | "high";
+  effort: string; // piemēram "1–2h", "1–2d" u.tml.
+  liftPct?: number;
+};
+
+/** Ja Free report jau atdod gatavas rindas – izmantojam tās.
+ *  Ja nē, ģenerējam tās pašas rindas šeit no FreeData (meta/headings/images/..). */
+function makeQuickWinsRows(f: FreeData): QuickWinRow[] {
+  if (Array.isArray(f.quick_wins_rows) && f.quick_wins_rows.length)
+    return f.quick_wins_rows;
+
+  const rows: QuickWinRow[] = [];
+  const h1 = f.headings?.h1 ?? 0;
+  const desc = (f.meta?.description || "").trim();
+  const missingAlt = f.images?.missingAlt ?? 0;
+  const internalLinks = f.links?.internal ?? 0;
+
+  rows.push({
+    field: "Hero text",
+    current: (f.meta?.title || "—").toUpperCase(),
+    recommended: "Clear value. Start in minutes.",
+    liftPct: 12,
+  });
+  rows.push({
+    field: "Meta description",
+    current: desc ? desc : "Nav atrasta",
+    recommended:
+      "≈150 chars with benefit + brand. Include CTA (e.g., “Get started in minutes”).",
+    liftPct: 2,
+  });
+  rows.push({
+    field: "Image ALT texts",
+    current:
+      missingAlt > 0
+        ? `Trūkst: ${missingAlt} (${
+            f.images?.total
+              ? Math.round((missingAlt / (f.images?.total || 1)) * 100)
+              : "~"
+          }%)`
+        : "OK",
+    recommended: 'Add short, descriptive ALT; decorative images use alt="".',
+    liftPct: 2,
+  });
+  rows.push({
+    field: "H1 virsraksti",
+    current: `${h1} uz lapu`,
+    recommended: "Ensure exactly 1 H1 with main intent/keyword.",
+    liftPct: 6,
+  });
+  rows.push({
+    field: "Canonical",
+    current: f.meta?.canonical || "Nav atrasts",
+    recommended: "Point to canonical w/o params; match primary URL.",
+    liftPct: 0,
+  });
+  rows.push({
+    field: "robots.txt",
+    current: f.robots?.robotsTxt === "ok" ? "OK" : "Trūkst",
+    recommended: "Include sitemap reference in robots.txt.",
+    liftPct: 0,
+  });
+  rows.push({
+    field: "sitemap.xml",
+    current: f.robots?.sitemapXml === "ok" ? "OK" : "Trūkst",
+    recommended: "Keep sitemap auto-updating.",
+    liftPct: 0,
+  });
+  rows.push({
+    field: "Social meta (OG/Twitter)",
+    current: f.social?.og || f.social?.twitter ? "Daļēji/OK" : "Trūkst",
+    recommended:
+      "Add og:title, og:description, og:image, og:url, twitter:card.",
+    liftPct: 2,
+  });
+  rows.push({
+    field: "Iekšējās saites",
+    current: `Kopā ${internalLinks} · ieteicams 20+`,
+    recommended:
+      "Add ≥5 internal links to main pages (pricing, contact, FAQ…).",
+    liftPct: 1,
+  });
+
+  return rows;
+}
+
+function makeBacklogRows(f: FreeData): BacklogRow[] {
+  if (Array.isArray(f.backlog_rows) && f.backlog_rows.length)
+    return f.backlog_rows;
+
+  const h1 = f.headings?.h1 ?? 0;
+  const desc = (f.meta?.description || "").trim();
+  const missingAlt = f.images?.missingAlt ?? 0;
+
+  const rows: BacklogRow[] = [
+    {
+      task: "H1 struktūra",
+      current: `${h1} H1 uz lapu`,
+      recommended: "Set exactly 1 H1 with clear value proposition.",
+      priority: "high",
+      effort: "1–2h",
+      liftPct: 6,
+    },
+    {
+      task: "Meta description",
+      current: desc ? desc : "Nav atrasta",
+      recommended: "≈150 chars incl. benefit, features and CTA. Brand mention.",
+      priority: "med",
+      effort: "1–2h",
+      liftPct: 2,
+    },
+    {
+      task: "ALT teksti",
+      current: missingAlt > 0 ? `Trūkst: ${missingAlt}` : "OK",
+      recommended:
+        "Add ALT to all non-decorative images; concise and specific.",
+      priority: "med",
+      effort: "2–4h",
+      liftPct: 2,
+    },
+    {
+      task: "Social meta",
+      current: f.social?.og || f.social?.twitter ? "Daļēji/OK" : "Trūkst",
+      recommended:
+        "Add og:title, og:description, og:image, og:url, twitter:card.",
+      priority: "low",
+      effort: "1–2h",
+      liftPct: 2,
+    },
+    {
+      task: "Pricing/Plans sadaļa",
+      current: f.sections
+        ? (f as any).sections?.pricing
+          ? "Atrasta"
+          : "Nav atrasta"
+        : "—",
+      recommended: "Add a clear plan / “from …” pricing with CTA.",
+      priority: "med",
+      effort: "1–2d",
+      liftPct: 4,
+    },
+    {
+      task: "FAQ sadaļa",
+      current: f.sections
+        ? (f as any).sections?.faq
+          ? "Atrasta"
+          : "Nav atrasta"
+        : "—",
+      recommended: "Add 6–10 FAQs with short answers.",
+      priority: "med",
+      effort: "0.5–1d",
+      liftPct: 3,
+    },
+    {
+      task: "Testimonials/Logos",
+      current: (f as any)?.sections?.social_proof ? "Atrasti" : "Nav atrasti",
+      recommended: "Add quotes or client logos row (≥6).",
+      priority: "high",
+      effort: "1–2d",
+      liftPct: 6,
+    },
+  ];
+  return rows;
+}
+
+/** -------------------------------- Komponents -------------------------------- */
 export default function FullReportView() {
   const [url, setUrl] = useState("");
   const [starting, setStarting] = useState(false);
@@ -169,50 +322,34 @@ export default function FullReportView() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // NEW: overlay from Free report so Quick Wins & Backlog match exactly
-  const [freeOverlay, setFreeOverlay] = useState<{
-    quick_wins?: string[];
-    prioritized_backlog?: BacklogItem[];
-  } | null>(null);
+  // Free report datu “overlay”, lai tabulas sakristu ar Free report
+  const [freeRaw, setFreeRaw] = useState<FreeData | null>(null);
   const [overlayLoading, setOverlayLoading] = useState(false);
 
-  // Read ?url= and autostart
+  // ?url & autostart
   useEffect(() => {
     const usp = new URLSearchParams(window.location.search);
     const qUrl = usp.get("url") || "";
     const auto = usp.get("autostart") === "1" || usp.get("auto") === "1";
     if (qUrl) setUrl(qUrl);
-    if (qUrl && auto) {
-      void startAnalysis(qUrl);
-    }
+    if (qUrl && auto) void startAnalysis(qUrl);
   }, []);
 
-  // After SSE completes, fetch Free report for same URL and overlay
   async function hydrateFromFree(targetUrl?: string) {
     const final = (targetUrl || report?.url || report?.page?.url || "").trim();
     if (!final) return;
     setOverlayLoading(true);
     try {
-      const rr = await runAnalyze(final);
-      if (rr?.ok && rr.data) {
-        const qw = Array.isArray(rr.data.quick_wins)
-          ? rr.data.quick_wins
-          : undefined;
-        const pb = Array.isArray(rr.data.prioritized_backlog)
-          ? rr.data.prioritized_backlog
-          : undefined;
-        setFreeOverlay({ quick_wins: qw, prioritized_backlog: pb });
-      } else {
-        setFreeOverlay(null);
-      }
+      const rr = await runAnalyze(final); // tas pats, ko izmanto Free report
+      if (rr?.ok && rr.data) setFreeRaw(rr.data as FreeData);
+      else setFreeRaw(null);
     } catch {
-      setFreeOverlay(null);
+      setFreeRaw(null);
     } finally {
       setOverlayLoading(false);
     }
   }
 
-  // SSE runner
   async function startAnalysis(raw: string) {
     const target = raw.trim();
     if (!target) return;
@@ -220,7 +357,7 @@ export default function FullReportView() {
     setError(null);
     setProgress(5);
     setStarting(true);
-    setFreeOverlay(null);
+    setFreeRaw(null);
     try {
       const sid = Math.random().toString(36).slice(2);
       const qs = new URLSearchParams({
@@ -228,7 +365,6 @@ export default function FullReportView() {
         mode: "full",
         sid,
       }).toString();
-
       const es = new EventSource(`/api/analyze-stream?${qs}`);
 
       es.addEventListener("progress", (ev: any) => {
@@ -249,7 +385,6 @@ export default function FullReportView() {
           } else {
             setReport(d as Report);
             setProgress(100);
-            // Immediately overlay Quick Wins & Backlog from Free report endpoint
             void hydrateFromFree(d?.url || d?.page?.url);
           }
         } catch (e: any) {
@@ -294,26 +429,15 @@ export default function FullReportView() {
     [report]
   );
 
-  // Quick Wins & Backlog: prefer Free-overlay → else Full report data → else defaults
-  const quickWinsToShow: string[] = useMemo(() => {
-    if (freeOverlay?.quick_wins && freeOverlay.quick_wins.length > 0)
-      return freeOverlay.quick_wins;
-    if (report?.quick_wins && report.quick_wins.length > 0)
-      return report.quick_wins;
-    return [
-      "Improve CTA visibility and clarity above the fold.",
-      "Add testimonials near the primary CTA for immediate social proof.",
-    ];
-  }, [freeOverlay, report]);
-
-  const backlogToShow: BacklogItem[] = useMemo(() => {
-    if (
-      freeOverlay?.prioritized_backlog &&
-      freeOverlay.prioritized_backlog.length > 0
-    )
-      return freeOverlay.prioritized_backlog;
-    return report?.prioritized_backlog || [];
-  }, [freeOverlay, report]);
+  // Tabulām izmantojam Free report datus (vai ģenerējam no tiem)
+  const quickRows = useMemo<QuickWinRow[]>(
+    () => (freeRaw ? makeQuickWinsRows(freeRaw) : []),
+    [freeRaw]
+  );
+  const backlogRows = useMemo<BacklogRow[]>(
+    () => (freeRaw ? makeBacklogRows(freeRaw) : []),
+    [freeRaw]
+  );
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
@@ -336,8 +460,7 @@ export default function FullReportView() {
           {starting ? "Analyzing…" : "Run Full Audit"}
         </button>
         <div className="text-xs text-slate-500">
-          SSE live analysis{" "}
-          {overlayLoading ? "· syncing with Free report…" : ""}
+          SSE live analysis {overlayLoading ? "· syncing Free report…" : ""}
         </div>
       </div>
 
@@ -356,7 +479,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* ============ Overview / Score ============ */}
+      {/* Overview / Score */}
       {report && (
         <div className="grid md:grid-cols-[1.1fr,0.9fr] gap-6">
           <div className="rounded-2xl border bg-white p-5">
@@ -426,7 +549,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* ============ Sections Present (like Free report) ============ */}
+      {/* Sections Present */}
       {report && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium text-slate-700">
@@ -434,14 +557,14 @@ export default function FullReportView() {
           </div>
           <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
             {[
-              { k: "hero", label: "hero" },
-              { k: "social_proof", label: "social proof" },
-              { k: "features", label: "features" },
-              { k: "contact", label: "contact" },
-              { k: "value_prop", label: "value prop" },
-              { k: "pricing", label: "pricing" },
-              { k: "faq", label: "faq" },
-              { k: "footer", label: "footer" },
+              { k: "hero", label: "Hero" },
+              { k: "social_proof", label: "Social Proof" },
+              { k: "features", label: "Features" },
+              { k: "contact", label: "Contact" },
+              { k: "value_prop", label: "Value Prop" },
+              { k: "pricing", label: "Pricing" },
+              { k: "faq", label: "FAQ" },
+              { k: "footer", label: "Footer" },
             ].map((it) => {
               const ok = !!(report.sections_detected as any)?.[it.k];
               return (
@@ -451,7 +574,7 @@ export default function FullReportView() {
                       ok ? "bg-emerald-500" : "bg-rose-500"
                     }`}
                   />
-                  <span className="capitalize">{it.label}</span>
+                  <span>{it.label}</span>
                 </div>
               );
             })}
@@ -459,84 +582,122 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* ============ Quick Wins (synced with Free) ============ */}
+      {/* Quick Wins — TABULA kā Free report */}
       {report && (
-        <div className="rounded-2xl border bg-white p-5">
+        <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-slate-700">Quick Wins</div>
             <div className="text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5">
-              ≈ +9% leads {overlayLoading ? "· syncing…" : "(from Free report)"}
+              (from Free report){overlayLoading ? " · syncing…" : ""}
             </div>
           </div>
-          <ul className="mt-3 list-disc pl-5 text-sm text-slate-700">
-            {quickWinsToShow.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
+
+          <table className="mt-3 w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-50 text-slate-600">
+                <th className="text-left p-2 border">Lauks</th>
+                <th className="text-left p-2 border">Esošais</th>
+                <th className="text-left p-2 border">Ieteicamais</th>
+                <th className="text-left p-2 border">Potenciālais ieguvums</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(quickRows.length ? quickRows : []).map((r, i) => (
+                <tr key={i} className="align-top">
+                  <td className="p-2 border whitespace-nowrap">{r.field}</td>
+                  <td className="p-2 border">{r.current}</td>
+                  <td className="p-2 border">{r.recommended}</td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {typeof r.liftPct === "number"
+                      ? `≈ +${r.liftPct}% leads`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+              {quickRows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="p-2 text-slate-500 border">
+                    Waiting for Free report overlay…
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {/* ============ Prioritized Backlog (synced with Free) ============ */}
+      {/* Prioritized Backlog — TABULA kā Free report */}
       {report && (
-        <div className="rounded-2xl border bg-white p-5">
+        <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="text-sm font-medium text-slate-700">
             Prioritized Backlog
           </div>
-          <div className="mt-3 space-y-2 text-sm">
-            {backlogToShow.map((b, i) => (
-              <div
-                key={i}
-                className="rounded-lg border px-3 py-2 flex items-center justify-between"
-              >
-                <div>{b.title}</div>
-                <div className="flex items-center gap-2">
-                  {typeof b.lift_percent === "number" && (
-                    <span className="px-2 py-0.5 rounded text-xs border bg-emerald-50 text-emerald-700">
-                      ≈ +{b.lift_percent}% leads
-                    </span>
-                  )}
-                  {b.impact && (
+          <table className="mt-3 w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-50 text-slate-600">
+                <th className="text-left p-2 border">Uzdevums</th>
+                <th className="text-left p-2 border">Esošais</th>
+                <th className="text-left p-2 border">Ieteicamais</th>
+                <th className="text-left p-2 border">Prioritāte</th>
+                <th className="text-left p-2 border">Effort</th>
+                <th className="text-left p-2 border">Potenciālais ieguvums</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(backlogRows.length ? backlogRows : []).map((r, i) => (
+                <tr key={i} className="align-top">
+                  <td className="p-2 border whitespace-nowrap">{r.task}</td>
+                  <td className="p-2 border">{r.current}</td>
+                  <td className="p-2 border">{r.recommended}</td>
+                  <td className="p-2 border">
                     <span
                       className={[
                         "px-2 py-0.5 rounded text-xs border",
-                        impactBadgeClasses(b.impact),
+                        r.priority === "high"
+                          ? "bg-rose-100 text-rose-800 border-rose-200"
+                          : r.priority === "med"
+                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                          : "bg-emerald-100 text-emerald-800 border-emerald-200",
                       ].join(" ")}
                     >
-                      impact {toImpactLabel(b.impact)}
+                      {r.priority}
                     </span>
-                  )}
-                  {b.eta_days ? (
-                    <span className="px-2 py-0.5 rounded text-xs border bg-slate-50 text-slate-700">
-                      ETA {b.eta_days}d
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-            {backlogToShow.length === 0 && (
-              <div className="text-slate-500 text-sm">No backlog items.</div>
-            )}
-          </div>
+                  </td>
+                  <td className="p-2 border">{r.effort}</td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {typeof r.liftPct === "number"
+                      ? `≈ +${r.liftPct}% leads`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+              {backlogRows.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-2 text-slate-500 border">
+                    Waiting for Free report overlay…
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {/* ============ Copy suggestions (NEW) ============ */}
+      {/* Copy suggestions */}
       {report && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium text-slate-700">
             Copy suggestions
           </div>
-          <div className="mt-2 text-sm text-slate-700">
-            <ul className="list-disc pl-5">
-              {copySuggestions.length > 0
-                ? copySuggestions.map((s, i) => <li key={i}>{s}</li>)
-                : [
-                    "Rewrite the hero headline to clearly state the main benefit and add a compelling CTA.",
-                    "Add 2–3 short testimonials or client logos near the primary CTA.",
-                    "Rewrite features into concise benefit bullets (under 12 words each).",
-                  ].map((s, i) => <li key={i}>{s}</li>)}
-            </ul>
-          </div>
+          <ul className="mt-2 list-disc pl-5 text-sm text-slate-700">
+            {copySuggestions.length
+              ? copySuggestions.map((s, i) => <li key={i}>{s}</li>)
+              : [
+                  "Rewrite the hero headline to clearly state the main benefit and add a compelling CTA.",
+                  "Add 2–3 short testimonials or client logos near the primary CTA.",
+                  "Rewrite features into concise benefit bullets (under 12 words each).",
+                ].map((s, i) => <li key={i}>{s}</li>)}
+          </ul>
           {report.meta?.description && (
             <div className="mt-3 rounded-lg border p-3 bg-slate-50 text-sm">
               <div className="text-xs text-slate-500 mb-1">
@@ -548,12 +709,15 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* ============ Findings ============ */}
-      {report && findings.length > 0 && (
+      {/* Findings */}
+      {report && (report.key_findings?.length || report.findings?.length) ? (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Findings</div>
           <div className="mt-2 space-y-3">
-            {findings.map((f, i) => (
+            {(report.key_findings && report.key_findings.length > 0
+              ? report.key_findings
+              : report.findings || []
+            ).map((f, i) => (
               <div key={i} className="rounded-lg border p-3">
                 <div className="flex items-center justify-between">
                   <div className="font-medium">{f.title}</div>
@@ -575,9 +739,9 @@ export default function FullReportView() {
             ))}
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* ============ Content Audit ============ */}
+      {/* Content Audit */}
       {report && (report.content_audit || []).length > 0 && (
         <div className="rounded-2xl border bg-white p-5">
           <div className="text-sm font-medium">Content Audit</div>
