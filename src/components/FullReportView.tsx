@@ -48,13 +48,14 @@ type Report = {
   content_audit?: ContentAuditItem[];
   meta?: { title?: string; description?: string; canonical?: string };
 
-  /** Backend copy ieteikumi — atbalstām vairākas shēmas */
+  /** Backend copy ieteikumi — atbalstām vairākas shēmas + optional example */
   copy_suggestions?: Array<{
     field?: string;
-    current?: string; // “esošais”
-    recommended?: string; // “ieteicamais”
-    before?: string; // alternatīvs nosaukums esošajam
-    after?: string; // alternatīvs nosaukums ieteicamajam
+    current?: string; // esošais
+    recommended?: string; // ieteicamais (vadlīnija)
+    before?: string; // alternatīvs esošajam
+    after?: string; // alternatīvs ieteicamajam
+    example?: string; // JA backend jau atgriež piemēru — rādam 1:1
     priority?:
       | "low"
       | "med"
@@ -75,6 +76,7 @@ type Report = {
       recommended?: string;
       before?: string;
       after?: string;
+      example?: string;
       priority?: "low" | "med" | "high" | "medium" | 1 | 2 | 3;
       lift_percent?: number;
     }>;
@@ -180,7 +182,8 @@ type BacklogRow = {
 type CopyRow = {
   field?: string;
   current: string;
-  recommended: string;
+  recommended: string; // vadlīnija / kā labot
+  example?: string; // reālais piemērs (no backend vai ģenerēts on-demand)
   priority: "low" | "med" | "high";
   liftPct?: number;
 };
@@ -333,7 +336,7 @@ function makeBacklogRows(f: FreeData): BacklogRow[] {
   return rows;
 }
 
-/** --------- Copy suggestions: ņemam no backend, ar fallback, un rādam TABULU --------- */
+/** --------- Copy suggestions utilītas --------- */
 function toPriority(p: any): "low" | "med" | "high" {
   if (p === 3 || String(p).toLowerCase() === "high") return "high";
   if (
@@ -359,8 +362,12 @@ function extractCopyRows(r?: Report, f?: FreeData | null): CopyRow[] {
         const priority = toPriority(x.priority);
         const liftPct =
           typeof x.lift_percent === "number" ? x.lift_percent : undefined;
-        if (!current && !recommended) return null;
-        return { field, current, recommended, priority, liftPct };
+        const example =
+          typeof x.example === "string" && x.example.trim()
+            ? x.example.trim()
+            : undefined;
+        if (!current && !recommended && !example) return null;
+        return { field, current, recommended, example, priority, liftPct };
       })
       .filter(Boolean) as CopyRow[];
     if (rows.length) return rows;
@@ -412,9 +419,16 @@ export default function FullReportView() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Free report datu “overlay”, lai Quick Wins/Prioritized Backlog sakristu ar Free report
+  // Free report overlay (Quick Wins + Backlog saskaņošanai)
   const [freeRaw, setFreeRaw] = useState<FreeData | null>(null);
   const [overlayLoading, setOverlayLoading] = useState(false);
+
+  // Copy example cache
+  const [copyExamples, setCopyExamples] = useState<Record<number, string>>({});
+  const [copyLoading, setCopyLoading] = useState<Record<number, boolean>>({});
+  const [copyError, setCopyError] = useState<
+    Record<number, string | undefined>
+  >({});
 
   useEffect(() => {
     const usp = new URLSearchParams(window.location.search);
@@ -447,6 +461,8 @@ export default function FullReportView() {
     setProgress(5);
     setStarting(true);
     setFreeRaw(null);
+    setCopyExamples({});
+    setCopyError({});
     try {
       const sid = Math.random().toString(36).slice(2);
       const qs = new URLSearchParams({
@@ -520,11 +536,44 @@ export default function FullReportView() {
     () => (freeRaw ? makeBacklogRows(freeRaw) : []),
     [freeRaw]
   );
-
   const copyRows = useMemo<CopyRow[]>(
     () => extractCopyRows(report || undefined, freeRaw),
     [report, freeRaw]
   );
+
+  async function generateExample(i: number, row: CopyRow) {
+    if (copyLoading[i]) return;
+    setCopyLoading((m) => ({ ...m, [i]: true }));
+    setCopyError((m) => ({ ...m, [i]: undefined }));
+    try {
+      const res = await fetch("/api/copy-example", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          field: row.field,
+          current: row.current,
+          recommended: row.recommended,
+          url: report?.url || report?.page?.url,
+          title: report?.title || report?.page?.title || report?.meta?.title,
+          metaDescription:
+            report?.meta?.description || freeRaw?.meta?.description,
+          audienceHint: "website landing page visitors in LV",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok)
+        throw new Error(data?.error || "Failed to generate example");
+      const example: string = data.example;
+      setCopyExamples((m) => ({ ...m, [i]: example }));
+    } catch (e: any) {
+      setCopyError((m) => ({
+        ...m,
+        [i]: e?.message || "Failed to generate example",
+      }));
+    } finally {
+      setCopyLoading((m) => ({ ...m, [i]: false }));
+    }
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
@@ -678,7 +727,6 @@ export default function FullReportView() {
               (from Free report){overlayLoading ? " · syncing…" : ""}
             </div>
           </div>
-
           <table className="mt-3 w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600">
@@ -770,7 +818,7 @@ export default function FullReportView() {
         </div>
       )}
 
-      {/* Copy suggestions — TABULA no backend, ar fallback */}
+      {/* Copy suggestions — tabula ar reāla piemēra ģenerēšanu */}
       {report && (
         <div className="rounded-2xl border bg-white p-5 overflow-x-auto">
           <div className="text-sm font-medium text-slate-700">
@@ -788,38 +836,71 @@ export default function FullReportView() {
             </thead>
             <tbody>
               {copyRows.length ? (
-                copyRows.map((r, i) => (
-                  <tr key={i} className="align-top">
-                    <td className="p-2 border whitespace-nowrap">
-                      {r.field || "—"}
-                    </td>
-                    <td className="p-2 border">{r.current}</td>
-                    <td className="p-2 border">{r.recommended}</td>
-                    <td className="p-2 border">
-                      <span
-                        className={[
-                          "px-2 py-0.5 rounded text-xs border",
-                          r.priority === "high"
-                            ? "bg-rose-100 text-rose-800 border-rose-200"
-                            : r.priority === "med"
-                            ? "bg-amber-100 text-amber-800 border-amber-200"
-                            : "bg-emerald-100 text-emerald-800 border-emerald-200",
-                        ].join(" ")}
-                      >
-                        {r.priority}
-                      </span>
-                    </td>
-                    <td className="p-2 border whitespace-nowrap">
-                      {typeof r.liftPct === "number"
-                        ? `≈ +${r.liftPct}% leads`
-                        : "—"}
-                    </td>
-                  </tr>
-                ))
+                copyRows.map((r, i) => {
+                  const example = r.example ?? copyExamples[i];
+                  const loading = !!copyLoading[i];
+                  const err = copyError[i];
+                  return (
+                    <tr key={i} className="align-top">
+                      <td className="p-2 border whitespace-nowrap">
+                        {r.field || "—"}
+                      </td>
+                      <td className="p-2 border">{r.current || "—"}</td>
+                      <td className="p-2 border">
+                        <div className="space-y-2">
+                          <div>{r.recommended || "—"}</div>
+                          {example ? (
+                            <div className="rounded-md border bg-slate-50 p-2">
+                              <div className="text-[11px] text-slate-500 mb-1">
+                                Example
+                              </div>
+                              <div className="text-slate-800">{example}</div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <button
+                                className="text-xs rounded-md border px-2 py-1 hover:bg-slate-50 disabled:opacity-60"
+                                disabled={loading}
+                                onClick={() => generateExample(i, r)}
+                                title="Generate example with AI"
+                              >
+                                {loading ? "Generating…" : "Generate example"}
+                              </button>
+                              {err && (
+                                <span className="text-xs text-rose-600">
+                                  {err}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-2 border">
+                        <span
+                          className={[
+                            "px-2 py-0.5 rounded text-xs border",
+                            r.priority === "high"
+                              ? "bg-rose-100 text-rose-800 border-rose-200"
+                              : r.priority === "med"
+                              ? "bg-amber-100 text-amber-800 border-amber-200"
+                              : "bg-emerald-100 text-emerald-800 border-emerald-200",
+                          ].join(" ")}
+                        >
+                          {r.priority}
+                        </span>
+                      </td>
+                      <td className="p-2 border whitespace-nowrap">
+                        {typeof r.liftPct === "number"
+                          ? `≈ +${r.liftPct}% leads`
+                          : "—"}
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
                   <td colSpan={5} className="p-2 text-slate-500 border">
-                    No backend copy suggestions found. Showing once available.
+                    No copy suggestions found. Will show when available.
                   </td>
                 </tr>
               )}
