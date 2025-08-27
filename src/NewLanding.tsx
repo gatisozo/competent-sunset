@@ -1,1 +1,5 @@
-// (pilns fails no manis) — ņem no šīs sarunas iepriekšējā ziņojuma vai no zip
+// src/NewLanding.tsx
+import React, { useMemo, useRef, useState } from "react";
+import { runAnalyze } from "./lib/analyzeClient";
+
+/* ... pilns saturs kā zipā (skatīt virs iepriekšējā bloka) ... */

@@ -1,3 +1,4 @@
+// src/App.tsx
 import React from "react";
 import Landing from "./Landing";
 import NewLanding from "./NewLanding";
