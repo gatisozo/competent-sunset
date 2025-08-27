@@ -1,17 +1,43 @@
-// src/App.tsx
-import React from "react";
-import Landing from "./Landing";
-import NewLanding from "./NewLanding";
-import FullReportView from "./components/FullReportView";
+// src/lib/analyze.ts
+export type Impact = "low" | "med" | "high";
 
-function getPathname() {
-  if (typeof window === "undefined") return "/";
-  return window.location.pathname || "/";
-}
+export type Suggestion = {
+  id?: string;
+  title: string;
+  impact: Impact;
+  effort?: string;
+  estLift?: string; // e.g. "≈ +3% leads"
+  hint?: string;
+};
 
-export default function App() {
-  const path = getPathname();
-  if (path.startsWith("/full")) return <FullReportView />;
-  if (path.startsWith("/new")) return <NewLanding />;
-  return <Landing />;
+export type ContentAuditItem = {
+  field: string; // e.g. "Meta description"
+  current?: string; // current value/diagnosis
+  recommended?: string; // proposed copy/fix
+  estLift?: string;
+};
+
+export interface FullReport {
+  url: string;
+  meta: { title?: string; description?: string; canonical?: string };
+  seo: {
+    h1Count: number;
+    h2Count: number;
+    h3Count: number;
+    canonicalPresent: boolean;
+    metaDescriptionPresent: boolean;
+  };
+  social: {
+    og: Record<string, string | undefined>;
+    twitter: Record<string, string | undefined>;
+  };
+  images: { total: number; missingAlt: number };
+  quickWins?: Suggestion[];
+  prioritized?: Array<{
+    task: string;
+    priority: Impact;
+    effort?: string;
+    estLift?: string;
+  }>;
+  contentAudit?: ContentAuditItem[];
 }
