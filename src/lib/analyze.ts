@@ -1,41 +1,35 @@
 // src/lib/analyze.ts
 // PURE TYPE FILE for the frontend – no server-only imports here.
 
-//
-// Impact level used across suggestions/backlog.
-// Support both "med" and "medium", because sample.ts uses "medium".
-//
+// Impact level (pieļaujam arī "medium", jo sample.ts to lieto)
 export type Impact = "low" | "med" | "medium" | "high";
 
-//
-// A single actionable suggestion item.
-//
+// Viena ieteikuma ieraksts (sample.ts izmanto arī `recommendation`)
 export type Suggestion = {
   id?: string;
   title: string;
-  impact: Impact; // e.g. "low" | "medium" | "high"
-  effort?: string; // e.g. "low", "2–4h", "dev + copy"
-  estLift?: string; // e.g. "≈ +3% leads"
-  recommendation?: string; // sample.ts uses this field
+  impact: Impact; // "low" | "medium" | "high"
+  effort?: string; // piem., "low", "2–4h", "dev + copy"
+  estLift?: string; // piem., "≈ +3% leads"
+  recommendation?: string;
   hint?: string;
 };
 
-//
-// Content audit line item (used by sample.ts).
-//
+// Content audit ieraksts (sample.ts pievieno `present` un `section`)
 export type ContentAuditItem = {
-  section?: string; // sample.ts provides a section name (e.g. "Hero", "Pricing")
-  field: string; // e.g. "Meta description"
-  current?: string; // current value/diagnosis
-  recommended?: string; // proposed copy/fix
-  estLift?: string; // optional impact note
+  section?: string; // piem., "Hero", "Pricing"
+  field: string; // piem., "Meta description"
+  present?: boolean | "yes" | "no"; // sample.ts izmanto "present"
+  current?: string; // pašreizējā vērtība/diagnoze
+  recommended?: string; // ieteiktais labojums/teksts
+  estLift?: string; // pēc izvēles, ietekmes piezīme
 };
 
-//
-// The overall Full Report shape used by the UI and sample.ts.
-//
+// Dažkārt sample.ts ieliek objektu { url, title } "page" laukā
+export type PageRef = string | { url: string; title: string };
+
 export interface FullReport {
-  page?: string; // sample.ts sometimes passes a 'page' label
+  page?: PageRef; // <-- pieļauj gan string, gan {url,title}
   url: string;
 
   meta: {
@@ -66,7 +60,7 @@ export interface FullReport {
 
   prioritized?: Array<{
     task: string;
-    priority: Impact; // keep Impact here for consistency
+    priority: Impact;
     effort?: string;
     estLift?: string;
   }>;
