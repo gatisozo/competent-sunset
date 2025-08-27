@@ -1,43 +1,32 @@
-// src/lib/analyze.ts
-export type Impact = "low" | "med" | "high";
+// src/App.tsx
+import React, { Suspense } from "react";
+import Landing from "./Landing";
+import FullReportView from "./components/FullReportView";
 
-export type Suggestion = {
-  id?: string;
-  title: string;
-  impact: Impact;
-  effort?: string;
-  estLift?: string; // e.g. "≈ +3% leads"
-  hint?: string;
-};
+// Lazy import: strādā gan ar default, gan ar named export (NewLanding)
+const NewLanding = React.lazy(() =>
+  import("./NewLanding").then((m: any) => ({
+    default: m.default ?? m.NewLanding,
+  }))
+);
 
-export type ContentAuditItem = {
-  field: string; // e.g. "Meta description"
-  current?: string; // current value/diagnosis
-  recommended?: string; // proposed copy/fix
-  estLift?: string;
-};
+function getPathname() {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname || "/";
+}
 
-export interface FullReport {
-  url: string;
-  meta: { title?: string; description?: string; canonical?: string };
-  seo: {
-    h1Count: number;
-    h2Count: number;
-    h3Count: number;
-    canonicalPresent: boolean;
-    metaDescriptionPresent: boolean;
-  };
-  social: {
-    og: Record<string, string | undefined>;
-    twitter: Record<string, string | undefined>;
-  };
-  images: { total: number; missingAlt: number };
-  quickWins?: Suggestion[];
-  prioritized?: Array<{
-    task: string;
-    priority: Impact;
-    effort?: string;
-    estLift?: string;
-  }>;
-  contentAudit?: ContentAuditItem[];
+export default function App() {
+  const path = getPathname();
+
+  if (path.startsWith("/full")) return <FullReportView />;
+
+  if (path.startsWith("/new")) {
+    return (
+      <Suspense fallback={<div />}>
+        <NewLanding />
+      </Suspense>
+    );
+  }
+
+  return <Landing />;
 }
