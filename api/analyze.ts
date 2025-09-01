@@ -1,15 +1,12 @@
 // api/analyze.ts
-// Free report (non-stream) endpoint — drop-in saderīgs ar produkciju.
-// Pieņem POST { url, mode: "free" } un GET ?url=&mode=free
-// Nepieciešams: OPENAI_API_KEY
-// Papildus (neobligāti): OPENAI_MODEL, VITE_SCREENSHOT_URL_TMPL
+export const config = { runtime: "nodejs20.x" };
+
+// pārējais saturs kā manā iepriekšējā pilnajā variantā (bez izmaiņām)
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-// ---- OpenAI model selection (adds GPT-5 support with safe fallbacks) ----
 const MODEL_PREF = process.env.OPENAI_MODEL || "gpt-5";
 const MODEL_FALLBACKS = [MODEL_PREF, "gpt-5-mini", "gpt-4o-mini"] as const;
-// ------------------------------------------------------------------------
 
 const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
@@ -24,27 +21,19 @@ type NewAuditItem = {
 };
 type BacklogItem = {
   title: string;
-  impact: 1 | 2 | 3; // 1=high,2=med,3=low
+  impact: 1 | 2 | 3;
   effort?: "low" | "medium" | "high";
   eta_days?: number;
   notes?: string;
   lift_percent?: number;
 };
 
-function write(
-  res: VercelResponse,
-  event: "progress" | "result",
-  data: unknown
-) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method === "GET" && req.query?.screenshot) {
       return await serveScreenshot(req, res);
     }
+
     const mode = (
       (req.method === "GET"
         ? String(req.query?.mode || "")
@@ -62,7 +51,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    // Fetch page HTML
     const { status, text } = await fetchText(url);
     if (status >= 400 || !text) {
       res
@@ -71,7 +59,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    // Extract some basics
     const metaTitle = extract(text, /<title[^>]*>([\s\S]*?)<\/title>/i);
     const metaDesc = extract(
       text,
@@ -92,6 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sampleText: plain,
     });
 
+    res.setHeader("x-model-used", ai.chosen_model || "");
     res.status(200).json({
       ok: true,
       url,
@@ -153,6 +141,7 @@ async function fetchText(u: string) {
   const text = await r.text();
   return { status: r.status, url: r.url, text };
 }
+const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 function toPlainText(html: string) {
   return String(html || "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -171,21 +160,6 @@ function countTags(html: string, tag: string) {
   const m = html.match(re);
   return m ? m.length : 0;
 }
-function parseHeadings(html: string): Array<{ tag: string; text: string }> {
-  const out: Array<{ tag: string; text: string }> = [];
-  const re = /<(h[1-6])\b[^>]*>([\s\S]*?)<\/\1>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    out.push({ tag: m[1].toLowerCase(), text: stripTags(m[2]) });
-  }
-  return out;
-}
-function stripTags(s: string) {
-  return String(s || "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 async function callOpenAI(struct: {
   url: string;
@@ -198,7 +172,6 @@ async function callOpenAI(struct: {
 }) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY is not set");
-  const model = MODEL_PREF;
 
   const system = `You are a CRO/UX auditor for marketing landing pages.
 Return only strict JSON with these fields:
@@ -227,9 +200,9 @@ ${struct.sampleText.slice(0, 8000)}
     ],
   };
 
-  // Try preferred model first; on model/permission errors fall back automatically
   let lastErrText = "";
   let r: any = null;
+  let usedModel = "";
   for (const m of MODEL_FALLBACKS) {
     const resp = await fetch(OPENAI_URL, {
       method: "POST",
@@ -246,10 +219,10 @@ ${struct.sampleText.slice(0, 8000)}
     });
     if (resp.ok) {
       r = resp;
+      usedModel = m;
       break;
     }
     lastErrText = await resp.text().catch(() => "");
-    // if error looks like a model issue, continue to next fallback
     if (
       resp.status === 404 ||
       resp.status === 400 ||
@@ -257,7 +230,6 @@ ${struct.sampleText.slice(0, 8000)}
     ) {
       continue;
     }
-    // other errors shouldn't switch models
     r = resp;
     break;
   }
@@ -275,37 +247,12 @@ ${struct.sampleText.slice(0, 8000)}
   try {
     parsed = JSON.parse(text);
   } catch {}
-  return parsed as {
+
+  return { ...parsed, chosen_model: usedModel } as {
     findings?: Suggestion[];
     quick_wins?: string[];
     prioritized_backlog?: BacklogItem[];
     content_audit?: NewAuditItem[];
+    chosen_model: string;
   };
-}
-
-function normalizeBacklog(aiList: BacklogItem[] | undefined): BacklogItem[] {
-  const out: BacklogItem[] = [];
-  for (const b of aiList || []) {
-    const n = Number(b.impact);
-    const impact = n === 1 || n === 2 || n === 3 ? (n as 1 | 2 | 3) : 2;
-    out.push({
-      title: String(b.title || "").slice(0, 140),
-      impact,
-      effort: (["low", "medium", "high"] as const).includes(
-        (b.effort || "medium") as any
-      )
-        ? (b.effort as any)
-        : "medium",
-      eta_days:
-        typeof b.eta_days === "number"
-          ? Math.max(1, Math.min(30, Math.round(b.eta_days)))
-          : undefined,
-      lift_percent:
-        typeof b.lift_percent === "number"
-          ? Math.max(0, Math.min(50, Math.round(b.lift_percent)))
-          : undefined,
-      notes: String(b.notes || "").slice(0, 500),
-    });
-  }
-  return out.slice(0, 8);
 }
