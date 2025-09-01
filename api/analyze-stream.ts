@@ -1,7 +1,6 @@
 // api/analyze-stream.ts
 export const config = { runtime: "nodejs" };
 
-// Tipspeci nav vajadzīgi; Vercel nodrošina Node handlera signatūru.
 const MODEL_PREF = process.env.OPENAI_MODEL || "gpt-5";
 const MODEL_FALLBACKS = [MODEL_PREF, "gpt-5-mini", "gpt-4o-mini"] as const;
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
@@ -65,12 +64,11 @@ function screenshotUrl(u: string) {
 }
 
 export default async function handler(req: any, res: any) {
-  // SSE headers PIRMS jebkādas darba loģikas
+  // SSE headers – nosūtām PIRMS jebkāda body
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("x-sse", "1");
   const heartbeat = setInterval(() => res.write(":\n\n"), 15000);
 
   try {
@@ -181,7 +179,7 @@ ${plain.slice(0, 8000)}
       ) {
         sseWrite(res, "progress", {
           stage: "openai",
-          message: `Falling back…`,
+          message: "Falling back…",
         });
         continue;
       }
@@ -208,17 +206,15 @@ ${plain.slice(0, 8000)}
       parsed = JSON.parse(textOut);
     } catch {}
 
-    const payload = {
+    sseWrite(res, "result", {
       ok: true,
       url,
       meta: { title: metaTitle, description: metaDesc },
       counts: { h1: h1Count, h2: h2Count, h3: h3Count },
       screenshot: screenshotUrl(url),
       ...parsed,
-      chosen_model: usedModel,
-    };
-    res.setHeader("x-model-used", usedModel);
-    sseWrite(res, "result", payload);
+      chosen_model: usedModel, // ← modelis tagad tikai payloadā
+    });
     res.end();
   } catch (e: any) {
     sseWrite(res, "result", {
