@@ -1,15 +1,10 @@
 // api/analyze.ts
-export const config = { runtime: "nodejs20.x" };
-
-// pārējais saturs kā manā iepriekšējā pilnajā variantā (bez izmaiņām)
-
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+export const config = { runtime: "nodejs" };
 
 const MODEL_PREF = process.env.OPENAI_MODEL || "gpt-5";
 const MODEL_FALLBACKS = [MODEL_PREF, "gpt-5-mini", "gpt-4o-mini"] as const;
-
-const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 
 type ImpactStr = "high" | "medium" | "low";
 type Suggestion = { title: string; impact: ImpactStr; recommendation: string };
@@ -28,12 +23,8 @@ type BacklogItem = {
   lift_percent?: number;
 };
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   try {
-    if (req.method === "GET" && req.query?.screenshot) {
-      return await serveScreenshot(req, res);
-    }
-
     const mode = (
       (req.method === "GET"
         ? String(req.query?.mode || "")
@@ -47,15 +38,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const url = normalizeUrl(urlParam);
 
     if (!url) {
-      res.status(400).json({ error: "Missing url" });
+      res.statusCode = 400;
+      res.json({ error: "Missing url" });
       return;
     }
 
     const { status, text } = await fetchText(url);
     if (status >= 400 || !text) {
-      res
-        .status(400)
-        .json({ error: `Could not fetch page (HTTP ${status})`, url });
+      res.statusCode = 400;
+      res.json({ error: `Could not fetch page (HTTP ${status})`, url });
       return;
     }
 
@@ -80,7 +71,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     res.setHeader("x-model-used", ai.chosen_model || "");
-    res.status(200).json({
+    res.statusCode = 200;
+    res.json({
       ok: true,
       url,
       meta: { title: metaTitle, description: metaDesc },
@@ -90,38 +82,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       screenshot: screenshotUrl(url),
     });
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || "Unexpected error" });
-  }
-}
-
-async function serveScreenshot(req: VercelRequest, res: VercelResponse) {
-  try {
-    const u = normalizeUrl(String(req.query?.screenshot || ""));
-    if (!u) return res.status(400).send("bad url");
-
-    const [puppeteer, chromium] = await Promise.all([
-      import("puppeteer-core"),
-      import("@sparticuz/chromium"),
-    ]);
-
-    const exe = await chromium.executablePath();
-    const browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: { width: 1200, height: 800 },
-      executablePath: exe,
-      headless: chromium.headless,
-    });
-    const page = await browser.newPage();
-    await page.setUserAgent("Mozilla/5.0 (compatible; HolboxBot/1.0)");
-    await page.goto(u, { waitUntil: "networkidle2", timeout: 30000 });
-    const buf = await page.screenshot({ type: "png", fullPage: true });
-    await browser.close();
-
-    res.setHeader("Content-Type", "image/png");
-    res.setHeader("Cache-Control", "public, max-age=3600");
-    return res.status(200).send(buf);
-  } catch (e: any) {
-    return res.status(500).send(e?.message || "snap error");
+    res.statusCode = 500;
+    res.json({ error: e?.message || "Unexpected error" });
   }
 }
 
@@ -141,7 +103,6 @@ async function fetchText(u: string) {
   const text = await r.text();
   return { status: r.status, url: r.url, text };
 }
-const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 function toPlainText(html: string) {
   return String(html || "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")

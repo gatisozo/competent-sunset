@@ -1,18 +1,18 @@
 // api/model-check.ts
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+export const config = { runtime: "nodejs" };
 
 const MODEL_PREF = process.env.OPENAI_MODEL || "gpt-5";
 const MODEL_FALLBACKS = [MODEL_PREF, "gpt-5-mini", "gpt-4o-mini"] as const;
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(_req: any, res: any) {
   try {
     const key = process.env.OPENAI_API_KEY;
-    if (!key)
-      return res
-        .status(500)
-        .json({ ok: false, error: "OPENAI_API_KEY is not set" });
-
+    if (!key) {
+      res.statusCode = 500;
+      res.json({ ok: false, error: "OPENAI_API_KEY is not set" });
+      return;
+    }
     let lastErrText = "";
     let r: any = null;
     let usedModel = "";
@@ -48,28 +48,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       break;
     }
     if (!r || !r.ok) {
-      return res
-        .status(200)
-        .json({
-          ok: false,
-          tried: MODEL_FALLBACKS,
-          error: lastErrText || r?.statusText || "request failed",
-        });
+      res.statusCode = 200;
+      res.json({
+        ok: false,
+        tried: MODEL_FALLBACKS,
+        error: lastErrText || r?.statusText || "request failed",
+      });
+      return;
     }
     const j = await r.json();
     const out = j?.choices?.[0]?.message?.content?.trim();
     res.setHeader("x-model-used", usedModel);
-    return res
-      .status(200)
-      .json({
-        ok: true,
-        chosen_model: usedModel,
-        tried: MODEL_FALLBACKS,
-        sample: out,
-      });
+    res.statusCode = 200;
+    res.json({
+      ok: true,
+      chosen_model: usedModel,
+      tried: MODEL_FALLBACKS,
+      sample: out,
+    });
   } catch (e: any) {
-    return res
-      .status(200)
-      .json({ ok: false, error: e?.message || "Unexpected error" });
+    res.statusCode = 200;
+    res.json({ ok: false, error: e?.message || "Unexpected error" });
   }
 }
