@@ -6,6 +6,11 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
+// ---- OpenAI model selection (adds GPT-5 support with safe fallbacks) ----
+const MODEL_PREF = process.env.OPENAI_MODEL || "gpt-5";
+const MODEL_FALLBACKS = [MODEL_PREF, "gpt-5-mini", "gpt-4o-mini"] as const;
+// ------------------------------------------------------------------------
+
 const UA = "Mozilla/5.0 (compatible; HolboxAudit/1.0; +https://example.com)";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -14,23 +19,123 @@ type Suggestion = { title: string; impact: ImpactStr; recommendation: string };
 type NewAuditItem = {
   section: string;
   status: "ok" | "weak" | "missing";
-  rationale?: string;
-  suggestions?: string[];
-};
-type LegacyAuditItem = {
-  section: string;
-  present: boolean;
-  quality: "good" | "poor";
-  suggestion?: string;
+  rationale: string;
+  suggestions: string[];
 };
 type BacklogItem = {
   title: string;
-  impact: 1 | 2 | 3;
+  impact: 1 | 2 | 3; // 1=high,2=med,3=low
   effort?: "low" | "medium" | "high";
   eta_days?: number;
-  lift_percent?: number;
   notes?: string;
+  lift_percent?: number;
 };
+
+function write(
+  res: VercelResponse,
+  event: "progress" | "result",
+  data: unknown
+) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
+    if (req.method === "GET" && req.query?.screenshot) {
+      return await serveScreenshot(req, res);
+    }
+    const mode = (
+      (req.method === "GET"
+        ? String(req.query?.mode || "")
+        : String((req.body as any)?.mode || "")) || "free"
+    ).toLowerCase();
+
+    const urlParam =
+      req.method === "GET"
+        ? String(req.query?.url || "")
+        : String((req.body as any)?.url || "");
+    const url = normalizeUrl(urlParam);
+
+    if (!url) {
+      res.status(400).json({ error: "Missing url" });
+      return;
+    }
+
+    // Fetch page HTML
+    const { status, text } = await fetchText(url);
+    if (status >= 400 || !text) {
+      res
+        .status(400)
+        .json({ error: `Could not fetch page (HTTP ${status})`, url });
+      return;
+    }
+
+    // Extract some basics
+    const metaTitle = extract(text, /<title[^>]*>([\s\S]*?)<\/title>/i);
+    const metaDesc = extract(
+      text,
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["'][^>]*>/i
+    );
+    const h1Count = countTags(text, "h1");
+    const h2Count = countTags(text, "h2");
+    const h3Count = countTags(text, "h3");
+    const plain = toPlainText(text);
+
+    const ai = await callOpenAI({
+      url,
+      title: metaTitle,
+      description: metaDesc,
+      h1Count,
+      h2Count,
+      h3Count,
+      sampleText: plain,
+    });
+
+    res.status(200).json({
+      ok: true,
+      url,
+      meta: { title: metaTitle, description: metaDesc },
+      counts: { h1: h1Count, h2: h2Count, h3: h3Count },
+      ...ai,
+      mode,
+      screenshot: screenshotUrl(url),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Unexpected error" });
+  }
+}
+
+async function serveScreenshot(req: VercelRequest, res: VercelResponse) {
+  try {
+    const u = normalizeUrl(String(req.query?.screenshot || ""));
+    if (!u) return res.status(400).send("bad url");
+
+    const [puppeteer, chromium] = await Promise.all([
+      import("puppeteer-core"),
+      import("@sparticuz/chromium"),
+    ]);
+
+    const exe = await chromium.executablePath();
+    const browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: { width: 1200, height: 800 },
+      executablePath: exe,
+      headless: chromium.headless,
+    });
+    const page = await browser.newPage();
+    await page.setUserAgent("Mozilla/5.0 (compatible; HolboxBot/1.0)");
+    await page.goto(u, { waitUntil: "networkidle2", timeout: 30000 });
+    const buf = await page.screenshot({ type: "png", fullPage: true });
+    await browser.close();
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    return res.status(200).send(buf);
+  } catch (e: any) {
+    return res.status(500).send(e?.message || "snap error");
+  }
+}
 
 function normalizeUrl(u: string) {
   const s = (u || "").trim();
@@ -48,11 +153,12 @@ async function fetchText(u: string) {
   const text = await r.text();
   return { status: r.status, url: r.url, text };
 }
-function stripTags(s: string) {
-  return s
+function toPlainText(html: string) {
+  return String(html || "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -67,98 +173,18 @@ function countTags(html: string, tag: string) {
 }
 function parseHeadings(html: string): Array<{ tag: string; text: string }> {
   const out: Array<{ tag: string; text: string }> = [];
-  const re = /<(h[1-3])\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  const re = /<(h[1-6])\b[^>]*>([\s\S]*?)<\/\1>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html))) {
-    const tag = m[1].toLowerCase();
-    const text = stripTags(m[2]);
-    out.push({ tag, text });
+    out.push({ tag: m[1].toLowerCase(), text: stripTags(m[2]) });
   }
   return out;
 }
-function classifyLinks(html: string, baseUrl: string) {
-  const host = (() => {
-    try {
-      return new URL(baseUrl).host;
-    } catch {
-      return "";
-    }
-  })();
-  const hrefRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
-  let m: RegExpExecArray | null;
-  let total = 0,
-    internal = 0,
-    external = 0;
-  while ((m = hrefRe.exec(html))) {
-    total++;
-    const h = (m[1] || "").trim();
-    if (!h) continue;
-    if (/^https?:\/\//i.test(h)) {
-      try {
-        const u = new URL(h);
-        if (u.host === host) internal++;
-        else external++;
-      } catch {
-        /* ignore */
-      }
-    } else {
-      internal++; // relatīvs links → iekšējs
-    }
-  }
-  return { total, internal, external };
-}
-function analyzeImages(html: string) {
-  const imgRe = /<img\b[^>]*>/gi;
-  const altRe = /\balt=["']([^"']*)["']/i;
-  const imgs = html.match(imgRe) || [];
-  let total = imgs.length;
-  let missingAlt = 0;
-  for (const img of imgs) {
-    const alt = img.match(altRe)?.[1];
-    if (!alt || !alt.trim()) missingAlt++;
-  }
-  return { total, missingAlt };
-}
-async function checkRobots(u: string) {
-  try {
-    const url = new URL(u);
-    const base = `${url.protocol}//${url.host}`;
-    const [r1, r2] = await Promise.allSettled([
-      fetch(`${base}/robots.txt`, { headers: { "user-agent": UA } as any }),
-      fetch(`${base}/sitemap.xml`, { headers: { "user-agent": UA } as any }),
-    ]);
-    const robotsTxtOk = r1.status === "fulfilled" && (r1.value as any).ok;
-    const sitemapOk = r2.status === "fulfilled" && (r2.value as any).ok;
-    return { robotsTxtOk, sitemapOk };
-  } catch {
-    return { robotsTxtOk: null, sitemapOk: null };
-  }
-}
-
-// Tas pats detectSections, kas /api/analyze-stream (lai rezultāti sakristu)
-function detectSections(
-  metaTitle: string,
-  metaDesc: string,
-  headings: { tag: string; text: string }[],
-  plain: string
-) {
-  const bucket = `${metaTitle}\n${metaDesc}\n${headings
-    .map((h) => h.text)
-    .join("\n")}\n${plain}`.toLowerCase();
-  const has = (re: RegExp) => re.test(bucket);
-  return {
-    hero: headings.some((h) => h.tag === "h1"),
-    value_prop:
-      (metaDesc || "").length >= 120 || has(/value prop|benefit|solve|helps/),
-    social_proof: has(/testimonial|review|trust|logo|case study/),
-    pricing: has(/price|pricing|plan|€|\$/),
-    features: has(/feature|benefit|capabilit|how it works/),
-    faq: has(/\bfaq\b|frequently asked|question/),
-    contact: has(/contact|support|email|phone|whatsapp|messenger/),
-    footer:
-      has(/©|copyright|privacy|terms|cookies/) ||
-      (plain.match(/https?:\/\//g) || []).length > 10,
-  };
+function stripTags(s: string) {
+  return String(s || "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function callOpenAI(struct: {
@@ -172,7 +198,7 @@ async function callOpenAI(struct: {
 }) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY is not set");
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = MODEL_PREF;
 
   const system = `You are a CRO/UX auditor for marketing landing pages.
 Return only strict JSON with these fields:
@@ -201,23 +227,46 @@ ${struct.sampleText.slice(0, 8000)}
     ],
   };
 
-  const r = await fetch(OPENAI_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [{ role: "system", content: system }, user as any],
-    }),
-  });
-
-  if (!r.ok) {
-    const errText = await r.text().catch(() => "");
-    throw new Error(`OpenAI HTTP ${r.status}: ${errText || r.statusText}`);
+  // Try preferred model first; on model/permission errors fall back automatically
+  let lastErrText = "";
+  let r: any = null;
+  for (const m of MODEL_FALLBACKS) {
+    const resp = await fetch(OPENAI_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: m,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [{ role: "system", content: system }, user as any],
+      }),
+    });
+    if (resp.ok) {
+      r = resp;
+      break;
+    }
+    lastErrText = await resp.text().catch(() => "");
+    // if error looks like a model issue, continue to next fallback
+    if (
+      resp.status === 404 ||
+      resp.status === 400 ||
+      /model/i.test(lastErrText)
+    ) {
+      continue;
+    }
+    // other errors shouldn't switch models
+    r = resp;
+    break;
+  }
+  if (!r || !r.ok) {
+    throw new Error(
+      `OpenAI HTTP ${r?.status || "ERR"}: ${
+        lastErrText || r?.statusText || "request failed"
+      }`
+    );
   }
 
   const j = await r.json();
@@ -253,183 +302,10 @@ function normalizeBacklog(aiList: BacklogItem[] | undefined): BacklogItem[] {
           : undefined,
       lift_percent:
         typeof b.lift_percent === "number"
-          ? Math.max(1, Math.min(50, Math.round(b.lift_percent)))
+          ? Math.max(0, Math.min(50, Math.round(b.lift_percent)))
           : undefined,
-      notes: b.notes ? String(b.notes).slice(0, 400) : undefined,
+      notes: String(b.notes || "").slice(0, 500),
     });
   }
   return out.slice(0, 8);
 }
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    const method = (req.method || "GET").toUpperCase();
-    let url = "";
-    if (method === "POST") {
-      const body = (req.body || {}) as any;
-      url = normalizeUrl(body?.url || "");
-    } else {
-      url = normalizeUrl((req.query?.url as string) || "");
-    }
-    const mode = (
-      (method === "POST"
-        ? (req.body as any)?.mode
-        : (req.query?.mode as string)) || "free"
-    )
-      .toString()
-      .toLowerCase();
-
-    if (!url) {
-      res.status(400).json({ error: "Missing url" });
-      return;
-    }
-
-    // 1) Ielasa lapu
-    const { status, url: finalUrl, text } = await fetchText(url);
-    if (status >= 400 || !text) {
-      res
-        .status(400)
-        .json({
-          error: `Could not fetch page (HTTP ${status})`,
-          url,
-          finalUrl,
-        });
-      return;
-    }
-
-    // 2) Strukturēti rādītāji
-    const metaTitle = extract(text, /<title[^>]*>([\s\S]*?)<\/title>/i);
-    const metaDesc = extract(
-      text,
-      /<meta[^>]+name=["']description["'][^>]+content=["']([\s\S]*?)["'][^>]*>/i
-    );
-    const canonical = extract(
-      text,
-      /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i
-    );
-    const h1Count = countTags(text, "h1");
-    const h2Count = countTags(text, "h2");
-    const h3Count = countTags(text, "h3");
-    const headings = parseHeadings(text);
-    const imgs = analyzeImages(text);
-    const links = classifyLinks(text, finalUrl);
-    const robots = await checkRobots(finalUrl);
-    const plain = stripTags(text).slice(0, 120000);
-
-    // 3) Detektē sadaļas (kā Full report)
-    const sections_detected = detectSections(
-      metaTitle,
-      metaDesc,
-      headings,
-      plain
-    );
-
-    // 4) AI analīze (reāli quick_wins/backlog/audit)
-    let ai: Awaited<ReturnType<typeof callOpenAI>> | null = null;
-    try {
-      ai = await callOpenAI({
-        url: finalUrl,
-        title: metaTitle,
-        description: metaDesc,
-        h1Count,
-        h2Count,
-        h3Count,
-        sampleText: plain,
-      });
-    } catch {
-      ai = null;
-    }
-
-    const quick_wins: string[] = (ai?.quick_wins || []).map((s) =>
-      String(s).slice(0, 220)
-    );
-    const findings: Suggestion[] = (ai?.findings || []).map((f) => ({
-      title: String(f.title || "").slice(0, 140),
-      impact: (["high", "medium", "low"] as const).includes(
-        (f.impact || "low") as any
-      )
-        ? (f.impact as ImpactStr)
-        : "low",
-      recommendation: String(f.recommendation || "").slice(0, 800),
-    }));
-    const content_audit_new: NewAuditItem[] = (ai?.content_audit || []).map(
-      (c) => {
-        const status =
-          c.status === "ok" || c.status === "weak" || c.status === "missing"
-            ? c.status
-            : "weak";
-        return {
-          section: String(c.section || "section")
-            .toLowerCase()
-            .replace(/\s+/g, "_"),
-          status,
-          rationale: c.rationale
-            ? String(c.rationale).slice(0, 600)
-            : undefined,
-          suggestions: Array.isArray(c.suggestions)
-            ? c.suggestions.slice(0, 6).map((s) => String(s).slice(0, 220))
-            : undefined,
-        };
-      }
-    );
-    const prioritized_backlog: BacklogItem[] = normalizeBacklog(
-      ai?.prioritized_backlog
-    );
-
-    // 5) Score pēc tās pašas formulas kā Full report
-    const scoreFromAI =
-      100 -
-      (content_audit_new.filter((r) => r.status === "missing").length * 5 +
-        content_audit_new.filter((r) => r.status === "weak").length * 2 +
-        (findings.filter((f) => f.impact === "high").length * 10 +
-          findings.filter((f) => f.impact === "medium").length * 5 +
-          findings.filter((f) => f.impact === "low").length * 2));
-
-    const score = Math.max(
-      0,
-      Math.min(100, Math.round(Number.isFinite(scoreFromAI) ? scoreFromAI : 60))
-    );
-
-    // 6) Atbilde (saderīga ar FreeReport.tsx)
-    const result = {
-      page: { url: finalUrl, title: metaTitle || undefined },
-      meta: {
-        title: metaTitle || undefined,
-        description: metaDesc || undefined,
-        canonical: canonical || undefined,
-      },
-      seo: {
-        h1Count,
-        h2Count,
-        h3Count,
-        canonicalPresent: !!canonical,
-        metaDescriptionPresent: !!metaDesc,
-      },
-      images: imgs,
-      links,
-      robots,
-      headingsOutline: headings,
-      quick_wins,
-      prioritized_backlog,
-      findings,
-      content_audit: content_audit_new,
-      assets: {
-        screenshot_url: screenshotUrl(finalUrl),
-        suggested_screenshot_url: screenshotUrl(finalUrl),
-      },
-      sections_detected,
-      score,
-      url: finalUrl,
-      finalUrl,
-      mode,
-    };
-
-    res.status(200).json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || "Internal error" });
-  }
-}
-
-export const config = {
-  api: { bodyParser: true },
-};
