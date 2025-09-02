@@ -2,12 +2,138 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Optional global tweaks */
+/* Dark-violet modern theme overrides — design-only (no functionality changes) */
+
+/* Full-height app */
 html,
 body,
 #root {
   height: 100%;
 }
+
+:root {
+  --bg-start: #0b1020;
+  --bg-mid: #0d1330;
+  --bg-end: #1a1446;
+  --glass: rgba(255, 255, 255, 0.06);
+  --glass-2: rgba(255, 255, 255, 0.04);
+  --text: #e6eaf2;
+  --muted: #a9b2c3;
+  --border: rgba(255, 255, 255, 0.12);
+  --ring: rgba(99, 102, 241, 0.25);
+}
+
+/* Global background + default text */
 body {
-  @apply bg-[#EDF6F9] text-slate-900;
+  background: radial-gradient(
+      1200px 600px at 20% -10%,
+      rgba(99, 102, 241, 0.25),
+      transparent
+    ),
+    radial-gradient(
+      1000px 600px at 100% 10%,
+      rgba(168, 85, 247, 0.18),
+      transparent
+    ),
+    linear-gradient(180deg, var(--bg-start), var(--bg-end));
+  color: var(--text);
+}
+
+/* Links */
+a {
+  color: #c7d2fe;
+}
+a:hover {
+  color: #e0e7ff;
+}
+
+/* Glassy surfaces and borders */
+.bg-white {
+  background-color: var(--glass) !important;
+}
+.bg-slate-50 {
+  background-color: var(--glass-2) !important;
+}
+.bg-indigo-50 {
+  background-color: rgba(99, 102, 241, 0.12) !important;
+  color: #e0e7ff !important;
+}
+.bg-slate-100 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+.border,
+.border-slate-200 {
+  border-color: var(--border) !important;
+}
+.ring-slate-100 {
+  --tw-ring-color: var(--ring) !important;
+}
+.shadow-sm {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.38) !important;
+}
+
+/* Text scale tweaks for dark */
+.text-slate-900 {
+  color: var(--text) !important;
+}
+.text-slate-800 {
+  color: #e2e8f0 !important;
+}
+.text-slate-700 {
+  color: #cbd5e1 !important;
+}
+.text-slate-600 {
+  color: #a8b3c7 !important;
+}
+.text-slate-500 {
+  color: #8a95aa !important;
+}
+.text-indigo-900 {
+  color: #e0e7ff !important;
+}
+
+/* Semi-transparent white variants used in components */
+.bg-white\\/60 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+.bg-white\\/40 {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+.bg-white\\/70 {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* Form fields */
+input,
+textarea,
+select {
+  background-color: var(--glass);
+  color: var(--text);
+  border-color: var(--border);
+}
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
+  border-color: #6366f1;
+}
+
+/* Chip/Badge tint */
+.badge,
+.Tag,
+.Pill {
+  background-color: rgba(99, 102, 241, 0.15);
+  color: #e0e7ff;
+}
+
+/* Ensure CTA buttons stay white */
+button.bg-white.text-indigo-700,
+a.bg-white.text-indigo-700 {
+  background-color: #ffffff !important;
+  color: #3730a3 !important;
 }
