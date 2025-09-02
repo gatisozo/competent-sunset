@@ -2,9 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dark-violet modern theme overrides — design-only (no functionality changes) */
+/* ===== Dark Violet Theme — CSS-only, no content/logic changes ===== */
 
-/* Full-height app */
 html,
 body,
 #root {
@@ -12,18 +11,18 @@ body,
 }
 
 :root {
-  --bg-start: #0b1020;
+  --bg-start: #0b1020; /* deep navy */
   --bg-mid: #0d1330;
-  --bg-end: #1a1446;
+  --bg-end: #1a1446; /* violet */
   --glass: rgba(255, 255, 255, 0.06);
   --glass-2: rgba(255, 255, 255, 0.04);
   --text: #e6eaf2;
   --muted: #a9b2c3;
   --border: rgba(255, 255, 255, 0.12);
-  --ring: rgba(99, 102, 241, 0.25);
+  --ring: rgba(99, 102, 241, 0.35);
 }
 
-/* Global background + default text */
+/* Global background + base text */
 body {
   background: radial-gradient(
       1200px 600px at 20% -10%,
@@ -35,8 +34,24 @@ body {
       rgba(168, 85, 247, 0.18),
       transparent
     ),
-    linear-gradient(180deg, var(--bg-start), var(--bg-end));
+    linear-gradient(180deg, var(--bg-start), var(--bg-end)) !important;
   color: var(--text);
+}
+
+/* --- HERO: garantēti violetais gradients pirmajai <section> --- */
+#root > div > section:nth-of-type(1) {
+  background: radial-gradient(
+      900px 420px at 10% -10%,
+      rgba(99, 102, 241, 0.35),
+      transparent
+    ),
+    radial-gradient(
+      700px 420px at 90% 0%,
+      rgba(168, 85, 247, 0.22),
+      transparent
+    ),
+    linear-gradient(180deg, #0b1020 0%, #1a1446 100%) !important;
+  color: #fff !important;
 }
 
 /* Links */
@@ -47,7 +62,7 @@ a:hover {
   color: #e0e7ff;
 }
 
-/* Glassy surfaces and borders */
+/* Glassy surfaces + borders (overwrite Tailwind utilities) */
 .bg-white {
   background-color: var(--glass) !important;
 }
@@ -69,10 +84,10 @@ a:hover {
   --tw-ring-color: var(--ring) !important;
 }
 .shadow-sm {
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.38) !important;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.42) !important;
 }
 
-/* Text scale tweaks for dark */
+/* Text tone remap for dark */
 .text-slate-900 {
   color: var(--text) !important;
 }
@@ -92,24 +107,24 @@ a:hover {
   color: #e0e7ff !important;
 }
 
-/* Semi-transparent white variants used in components */
-.bg-white\\/60 {
+/* Semi‑transparent white variants often used in UI */
+.bg-white\/60 {
   background-color: rgba(255, 255, 255, 0.08) !important;
 }
-.bg-white\\/40 {
+.bg-white\/40 {
   background-color: rgba(255, 255, 255, 0.06) !important;
 }
-.bg-white\\/70 {
+.bg-white\/70 {
   background-color: rgba(255, 255, 255, 0.12) !important;
 }
 
-/* Form fields */
+/* Forms */
 input,
 textarea,
 select {
-  background-color: var(--glass);
-  color: var(--text);
-  border-color: var(--border);
+  background-color: var(--glass) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
 }
 input::placeholder,
 textarea::placeholder {
@@ -119,21 +134,18 @@ input:focus,
 textarea:focus,
 select:focus {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
-  border-color: #6366f1;
+  box-shadow: 0 0 0 3px var(--ring) !important;
+  border-color: #6366f1 !important;
 }
 
-/* Chip/Badge tint */
-.badge,
-.Tag,
-.Pill {
-  background-color: rgba(99, 102, 241, 0.15);
-  color: #e0e7ff;
-}
-
-/* Ensure CTA buttons stay white */
+/* Keep main CTAs white for contrast on dark hero */
 button.bg-white.text-indigo-700,
 a.bg-white.text-indigo-700 {
-  background-color: #ffffff !important;
+  background-color: #fff !important;
   color: #3730a3 !important;
+}
+
+/* Subtle hover for cards */
+.rounded-2xl:hover {
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.5) !important;
 }
